@@ -33,6 +33,9 @@ STCOD_Cluster2 <- function(cellData, period = 24, watch_node = 5, neigh_number =
   cluster_seasonality <- rep(list(vector("numeric", length = period)), nrow(cellData))
   cell_seasonality <- rep(list(vector("numeric", length = period)), nrow(cellData))
   
+  memory_periods <- 3
+  cell_memories <- rep(list(vector("numeric", length = (period * memory_periods))), nrow(cellData))
+  
   cell_season_diff <- rep(list(vector("numeric", length = period)), nrow(cellData))
   cell_residual <- rep(list(vector("numeric", length = period)), nrow(cellData))
   cell_val_std <- rep(list(vector("numeric", length = period)), nrow(cellData))
@@ -126,6 +129,13 @@ STCOD_Cluster2 <- function(cellData, period = 24, watch_node = 5, neigh_number =
       #else check seasonality (wrt cell past seasons)
       else {
         
+        if((time > period * memory_periods) && node == watch_node) {
+          
+          print(fitnessCheck(cell_memories[[node]], curr_value, c(95,68), plot = TRUE))
+          
+        }
+        
+        
         if(is.na(prev_season_diff)){
           prev_season_diff <- 0
         }
@@ -185,6 +195,7 @@ STCOD_Cluster2 <- function(cellData, period = 24, watch_node = 5, neigh_number =
             c(cell_seasonality[[node]][curr_period],cellData[node,time]),
             c(1,cell_update_rate_OUT))
           
+          
         }
         #else OK
         else {
@@ -215,7 +226,11 @@ STCOD_Cluster2 <- function(cellData, period = 24, watch_node = 5, neigh_number =
               c(1,cell_update_rate_OK))
           }          
         }
-      }    
+      }   
+      
+      #remember values
+      cell_memories[[node]] <- c(cell_memories[[node]][2:length(cell_memories[[node]])], curr_value)
+      #cell_memories[[node]] <- c(cell_memories[[node]][2:length(cell_memories[[node]])], cell_seasonality[[node]][curr_period])
       
     }
     #END NODE OPERATION
@@ -472,9 +487,9 @@ STCOD_Cluster2 <- function(cellData, period = 24, watch_node = 5, neigh_number =
     if(curr_period == 24) {
       #plot(cell_seasonality[[5]], main =paste("cell seasonality, iteration",((time-1) %/% period) +1 ))
       
-      plot(cellData[watch_node,c((time - 23) : (time))], col="blue", main =paste("cell seasonality, iteration",((time-1) %/% period) +1 ), ylim = c(0,3))
-      lines(cellData[watch_node,c((time - 23) : (time))],col="blue")
-      lines(cell_seasonality[[watch_node]],col="black")
+      plot(cellData[watch_node,c((time - 23) : (time))], col="blue", main =paste("cell seasonality, iteration",((time-1) %/% period) +1 ), ylim = c(0,3), xaxt = "n", type = "o")
+      axis(1, at = 1:24, labels = (time - 23):time)
+       lines(cell_seasonality[[watch_node]],col="black")
       lines(-cell_season_diff[[watch_node]], col="red")
       lines(-cell_residual[[watch_node]], col = "green")
       points(cell_acalc[[watch_node]], col = "red")
@@ -482,8 +497,8 @@ STCOD_Cluster2 <- function(cellData, period = 24, watch_node = 5, neigh_number =
     }
   }
   
-  plot(cluster_seasonality[[watch_node]], main = "Final cellData seasonality")
-  
+  plot(cluster_seasonality[[watch_node]], main = "Final cluster seasonality", type = "o")
+
   print("end")
   
   
@@ -494,6 +509,13 @@ shiftRight <- function(vec, num = 1) {
   
   vec <- c(vec[(length(vec) - num + 1):length(vec)],vec[1:(length(vec)-num)])
   return(vec)
+  
+}
+
+shiftRightMatrix <- function(mat, num = 1) {
+  
+  mat <- cbind(mat[,(ncol(mat) - num + 1):ncol(mat)],mat[,1:(ncol(mat)-num)])
+  return(mat)
   
 }
 
@@ -1804,12 +1826,12 @@ sameHistory <- function(h1, h2, exact = TRUE) {
 }
 
 
-#build data sets ( sinusoids ) of various kinds for testing of detection and prediction
+#build data sets ( sinusoids ) of various kinds for testing of noisy and single anomaly detection
 
 createTestData1 <- function(period = 24, period_number = 7) {
 
   #normal sinusoid with chosen period, for a certain period_number, with lowest value 0.5, highest 2.5 
-  
+  sinusoid1 <- sin(pi*(0:((period*period_number) - 1))/(period/2)) + 1.5
   
   #robustness to noise
   
@@ -1881,12 +1903,253 @@ createTestData1 <- function(period = 24, period_number = 7) {
 }
 
 
-#calculates probability that a single value is a good fit to the distribution assumed 
-#from the rest of the nodes
-
-fitnessCheck <- function() {
+createTestData2 <- function(period = 24, period_number = 7) {
+  
+  
+  #normal sinusoid with chosen period, for a certain period_number, with lowest value 0.5, highest 2.5 
+  sinusoid1 <- sin(pi*(0:((period*period_number) - 1))/(period/2)) + 1.5
+    
+  
+  #anomaly length 5, fast down, fast up
+  sinusoid15 <- sinusoid1 + runif(period*period_number, -0.3, 0.3)
+  sinusoid15[83:87] <- sinusoid15[83:87]*c(0.4, 0.2, 0.2, 0.2, 0.8)
+  #anomaly length 5, fast down, slow up
+  sinusoid16 <- sinusoid1 + runif(period*period_number, -0.3, 0.3)
+  sinusoid16[83:87] <- sinusoid16[83:87]*c(0.4, 0.55, 0.65, 0.7, 0.85)
+  #anomaly length 5, slow down, fast up
+  sinusoid17 <- sinusoid1 + runif(period*period_number, -0.3, 0.3)
+  sinusoid17[83:87] <- sinusoid17[83:87]*c(0.8, 0.65, 0.5, 0.3, 0.8)
+  #anomaly length 5, slow down, slow up
+  sinusoid18 <- sinusoid1 + runif(period*period_number, -0.3, 0.3)
+  sinusoid18[83:87] <- sinusoid18[83:87]*c(0.75, 0.6, 0.4, 0.55, 0.7)
+  
+  clust <- rbind(sinusoid1,
+                 sinusoid15,
+                 sinusoid16,
+                 sinusoid17,
+                 sinusoid18)
+  
+  return(clust)
   
   
   
 }
 
+
+#calculates probability that a single value is a good fit to the distribution assumed 
+#from the rest of the nodes
+
+fitnessCheck <- function(historic, newValue, confidence, plot = FALSE) {
+  
+  library(forecast)
+  
+  #fit an arima to the historical data
+  aa <- auto.arima(historic)
+  ff <- forecast(aa, h = 1, level = confidence)
+  
+  if(plot == TRUE) {
+    plot(ff)
+    lines(rep(newValue, length(historic) + 1), col = "red")
+  }
+  if(newValue >= ff$lower[1] && newValue <= ff$upper[1]) {
+    return(TRUE)
+  }
+  else {
+    return(FALSE)
+  }
+  
+}
+
+testFSS <- function() {
+  
+  node_number = 5
+  feat_number = 4
+  feat_memory = 3
+  
+  period = 24
+  
+  
+  
+  periodHistory <- rep(list(rep(list(matrix(nrow = feat_number, ncol = feat_memory)), period)), node_number)
+ 
+  nodeList <- createTestNodeList(node_number, feat_number, period, period_number = 8)
+  
+  for(time in c(1:(ncol(nodeList[[1]])))) {
+    
+    currentPeriod <- ((time-1) %% period) + 1
+    print(paste("Time ",time,", hour ",currentPeriod))
+    
+    if(time == period*feat_memory + 1) {
+      print("Start node scoring")
+    }
+    
+    
+    node_scores <- NULL
+    currentValues <- rep(list(NULL), node_number)
+    baseValues <- rep(list(NULL), node_number)
+    
+    for(node in c(1:node_number)) {
+      
+      
+      
+      currentPeriodHistory <- periodHistory[[node]][[currentPeriod]]
+      currentPeriodHistory <- shiftRightMatrix(currentPeriodHistory, 1)
+      
+      currentFeatures <- nodeList[[node]][,time]
+      
+      currentPeriodHistory[, 1] <- currentFeatures
+      periodHistory[[node]][[currentPeriod]] <- currentPeriodHistory
+      
+      
+      currentValues[[node]] <- currentFeatures
+      
+      #Begin tests only after learning period
+      
+      if(time > period * feat_memory) {
+        muVals <- rowMeans(currentPeriodHistory)
+        sigVals <- rowSums((currentPeriodHistory - muVals)^2)/(dim(currentPeriodHistory)[2] - 1)
+        
+        baseValues[[node]] <- cbind(muVals, sigVals)
+        
+        node_multiv_score <- node_scoring(currentPeriodHistory, currentFeatures)
+        
+        node_scores <- c(node_scores, node_multiv_score)
+      }
+   
+      
+    }
+    
+    #cluster of a node with these neighbors
+    
+    if(time > period * feat_memory) {
+      print("Consider set of all features")
+      
+      print("Anomalous nodes: ")
+      
+      cluster_scoring(priorities = node_scores, 
+                      current = currentValues, 
+                      base = baseValues)
+    }
+  
+    
+  }
+  
+}
+
+
+createTestNodeList <- function(node_number, feat_number, period = 24, period_number = 8) {
+  
+  nodeList <- NULL
+  #5 nodes, each with 4 features, for 192 time slot
+  for(i in c(1:node_number)) {
+    
+    node <- createTestNode(mean = 2, range = 6, noise_level = 0.2, 
+                            feature_number = feat_number, period, period_number)
+    
+    nodeList <- c(nodeList, list(node))
+    
+  }
+  return (nodeList)
+  
+}
+
+createTestNode <- function(mean, range, noise_level, feature_number, period, period_number) {
+  
+  node <- NULL
+  
+  for(i in c(1:feature_number)) {
+    
+    sinusoid <- sin(pi*(0:((period*period_number) - 1))/(period/2)) * (range / 2) + mean + runif(period*period_number, -noise_level, noise_level)
+    
+    node <- rbind(node, sinusoid)
+    
+  }
+  
+  return(node)
+  
+  
+}
+
+#FGSS functions 
+
+#for multivariate: pass the correct subset of features
+#aggregated by feature
+#period history: for each j feature, remember m past elements from previous periods
+node_scoring <- function(currentPeriodHistory, currentFeatures) {
+    
+  mu <- rowMeans(currentPeriodHistory)  
+  sig2 <- rowSums((currentPeriodHistory - mu)^2)/(dim(currentPeriodHistory)[2] - 1)
+  
+  
+  Cim <- (currentFeatures * mu) / sig2
+  Bim <- (mu)^2 / sig2
+  
+  #for reference
+  base <- cbind(mean = mu, variance = sig2)
+  
+  
+  #aggregate Cim and Bim
+  Ci <- sum(Cim)
+  Bi <- sum(Bim)
+  Xi <- sum(currentFeatures)
+  
+  priority <- (Ci - Bi)^2 / 2 * Bi
+  
+  return(priority)
+  
+  
+}
+
+
+#priorities: priority (node score) for each n node.
+#current: list of n, values of current features for node.
+#base: list of n, matrix of j rows of column mu and sig2 
+
+cluster_scoring <- function(priorities, current, base) {
+  
+  #order priorities
+  prior_order <- sort(priorities, decreasing = TRUE,index.return = T)$ix
+  
+  subset <- NULL
+  C <- rep( 0  , length(prior_order))
+  B <- rep( 0  , length(prior_order))
+  
+  
+  #in order, calculate F(S)
+  for (size in c(1:length(prior_order))) {
+    
+    node <- prior_order[size]
+    
+    vals <- current[[node]]
+    mus <- base[[node]][,1]
+    sigs <- base[[node]][,2]
+        
+    
+    Cim <- (vals * mus) / sigs
+    Bim <- (mus)^2 / sigs
+    
+    Ci <- sum(Cim)
+    Bi <- sum(Bim)
+    
+    
+    C[size:length(C)] <- C[size:length(C)] + Ci
+    B[size:length(B)] <- B[size:length(B)] + Bi
+        
+    
+  }
+  
+  final_scores <- (C - B)^2 / 2*B
+  
+  string <- NULL
+  
+  for(size in c(1:length(prior_order))) {
+    
+    string <- paste(string," ", prior_order[size])
+    
+    print(paste("Set ",size,", nodes (",string,"), score ",final_scores[size]))
+    
+    
+  }
+    
+    
+}
