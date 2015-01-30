@@ -1,4 +1,5 @@
 
+#################################### Main Algorithm ##########################################
 
 #cluster = a table with rows of nodes in a cluster
 STCOD_Cluster2 <- function(cellData, period = 24, watch_node = 5, neigh_number = 5) {
@@ -275,9 +276,9 @@ STCOD_Cluster2 <- function(cellData, period = 24, watch_node = 5, neigh_number =
       #       }
       
       #for(nn in (1:neigh_number)) {
-         for(i in (1:nrow(cellData))) {
+      for(i in (1:nrow(cellData))) {
         
-       # i <- neigh_index[[node]][nn]
+        # i <- neigh_index[[node]][nn]
         
         ordnum <- as.numeric(ordered(prev_state[[node]][i,1], 
                                      levels = c("OUT-down", "TREND-down", "OK", "TREND-up", "OUT-up")))
@@ -489,7 +490,7 @@ STCOD_Cluster2 <- function(cellData, period = 24, watch_node = 5, neigh_number =
       
       plot(cellData[watch_node,c((time - 23) : (time))], col="blue", main =paste("cell seasonality, iteration",((time-1) %/% period) +1 ), ylim = c(0,3), xaxt = "n", type = "o")
       axis(1, at = 1:24, labels = (time - 23):time)
-       lines(cell_seasonality[[watch_node]],col="black")
+      lines(cell_seasonality[[watch_node]],col="black")
       lines(-cell_season_diff[[watch_node]], col="red")
       lines(-cell_residual[[watch_node]], col = "green")
       points(cell_acalc[[watch_node]], col = "red")
@@ -498,11 +499,15 @@ STCOD_Cluster2 <- function(cellData, period = 24, watch_node = 5, neigh_number =
   }
   
   plot(cluster_seasonality[[watch_node]], main = "Final cluster seasonality", type = "o")
-
+  
   print("end")
   
   
 }
+
+
+######################################## Shift Functions #######################
+
 
 #shift cells of a vector one position to the right, with wrapping
 shiftRight <- function(vec, num = 1) {
@@ -514,10 +519,17 @@ shiftRight <- function(vec, num = 1) {
 
 shiftRightMatrix <- function(mat, num = 1) {
   
-  mat <- cbind(mat[,(ncol(mat) - num + 1):ncol(mat)],mat[,1:(ncol(mat)-num)])
+  m1 <- matrix(mat[,(ncol(mat) - num + 1):ncol(mat)], ncol = num)
+  m2 <- matrix(mat[,1:(ncol(mat)-num)], ncol = ncol(mat) - num)
+
+  mat <- cbind(m1,m2)
   return(mat)
   
 }
+
+
+###################################### Linked List #############################
+
 
 compareHistory <- function(vec1, vec2) {
   
@@ -948,6 +960,8 @@ createTestAnomalyStruc <- function() {
   
   
 }
+
+
 
 
 #input: anomaly structure for a node
@@ -1455,6 +1469,8 @@ buildStateEntrySeason  <- function(node, prev_state, prev_neigh_value, state_mem
 }
 
 
+########################################## Markov Previsions ###################################
+
 #returns a list containing next step_numb steps with attached probability according to the cell historical data given
 #MST = Markov State Transition (extended with eventual history)
 #cellFeatures: a list of n arrays, each containing features value in a window of time
@@ -1526,7 +1542,7 @@ maxiTestUpdate <- function() {
       predData <- c(predData, NA)
     }
     else{
-    predData <- c(predData, bestPrediction$curr_val)
+      predData <- c(predData, bestPrediction$curr_val)
     }
   }
   
@@ -1802,7 +1818,6 @@ updateFeatureMarkov <- function(cellFeatureHistory, cellFeatMST) {
 }
 
 
-
 sameValue <- function(val1, val2) {
   
   return(val1 == val2)
@@ -1826,10 +1841,12 @@ sameHistory <- function(h1, h2, exact = TRUE) {
 }
 
 
+############################################# Sinusoids ##############################
+
 #build data sets ( sinusoids ) of various kinds for testing of noisy and single anomaly detection
 
 createTestData1 <- function(period = 24, period_number = 7) {
-
+  
   #normal sinusoid with chosen period, for a certain period_number, with lowest value 0.5, highest 2.5 
   sinusoid1 <- sin(pi*(0:((period*period_number) - 1))/(period/2)) + 1.5
   
@@ -1908,7 +1925,7 @@ createTestData2 <- function(period = 24, period_number = 7) {
   
   #normal sinusoid with chosen period, for a certain period_number, with lowest value 0.5, highest 2.5 
   sinusoid1 <- sin(pi*(0:((period*period_number) - 1))/(period/2)) + 1.5
-    
+  
   
   #anomaly length 5, fast down, fast up
   sinusoid15 <- sinusoid1 + runif(period*period_number, -0.3, 0.3)
@@ -1960,19 +1977,34 @@ fitnessCheck <- function(historic, newValue, confidence, plot = FALSE) {
   
 }
 
+
+################################################## Fast Subset Scan ###################################
+
 testFSS <- function() {
   
   node_number = 5
   feat_number = 4
-  feat_memory = 3
+  feat_memory = 12
+  
+  learning_iterations = 4
   
   period = 24
   
-  
+  feat_combinations <- powerset(c(1:feat_number))
   
   periodHistory <- rep(list(rep(list(matrix(nrow = feat_number, ncol = feat_memory)), period)), node_number)
- 
-  nodeList <- createTestNodeList(node_number, feat_number, period, period_number = 8)
+  residAvg <- rep(list(vector("numeric", length = feat_number)), node_number)
+  residVar <- rep(list(vector("numeric", length = feat_number)), node_number)
+  
+  monitorResiduals <- rep(list(NULL), node_number)
+  
+  
+  nodeList <- createTestNodeList(node_number, feat_number, period, period_number = 50)
+  
+  #add anomaly
+  nodeList[[1]][2,1000] <- nodeList[[1]][2,1000] * 0.4
+  nodeList[[3]][2,1000] <- nodeList[[3]][2,1000] * 0.4
+  nodeList[[4]][2,1000] <- nodeList[[4]][2,1000] * 0.4
   
   for(time in c(1:(ncol(nodeList[[1]])))) {
     
@@ -1988,51 +2020,102 @@ testFSS <- function() {
     currentValues <- rep(list(NULL), node_number)
     baseValues <- rep(list(NULL), node_number)
     
-    for(node in c(1:node_number)) {
+    for(feat_comb in feat_combinations) {
       
-      
-      
-      currentPeriodHistory <- periodHistory[[node]][[currentPeriod]]
-      currentPeriodHistory <- shiftRightMatrix(currentPeriodHistory, 1)
-      
-      currentFeatures <- nodeList[[node]][,time]
-      
-      currentPeriodHistory[, 1] <- currentFeatures
-      periodHistory[[node]][[currentPeriod]] <- currentPeriodHistory
-      
-      
-      currentValues[[node]] <- currentFeatures
-      
-      #Begin tests only after learning period
-      
-      if(time > period * feat_memory) {
-        muVals <- rowMeans(currentPeriodHistory)
-        sigVals <- rowSums((currentPeriodHistory - muVals)^2)/(dim(currentPeriodHistory)[2] - 1)
+      for(node in c(1:node_number)) {
         
-        baseValues[[node]] <- cbind(muVals, sigVals)
         
-        node_multiv_score <- node_scoring(currentPeriodHistory, currentFeatures)
+        currentPeriodHistory <- matrix(periodHistory[[node]][[currentPeriod]][feat_comb,], nrow = length(feat_comb))
+        currentFeatures <- nodeList[[node]][feat_comb,time]
+        currentResiduals <- NULL
         
-        node_scores <- c(node_scores, node_multiv_score)
+        
+        #Begin tests only after learning period
+        
+        if(time > period * feat_memory + learning_iterations * period) {
+          
+          
+          muVals <- rowMeans(currentPeriodHistory)
+          sigVals <- rowSums((currentPeriodHistory - muVals)^2)/(dim(currentPeriodHistory)[2] - 1)
+          ranl <- apply(currentPeriodHistory, 1, range)
+          ranVals <- ranl[2,] - ranl[1,]
+          
+          currentResiduals <- (currentFeatures - muVals) / ranVals
+          
+          
+          if(time == 1000) {
+            
+            print("debug")
+            
+            
+          }
+          
+          node_multiv_score <- node_scoring(currentPeriodHistory, currentFeatures, residAvg[[node]][feat_comb], residVar[[node]][feat_comb])
+          
+          node_scores <- c(node_scores, node_multiv_score)
+        }
+        else if(time > period * feat_memory) {
+          
+          #learn values for residual modeling
+          
+          muVals <- rowMeans(currentPeriodHistory)
+          sigVals <- rowSums((currentPeriodHistory - muVals)^2)/(dim(currentPeriodHistory)[2] - 1)
+          ranl <- apply(currentPeriodHistory, 1, range)
+          ranVals <- ranl[2,] - ranl[1,]
+          
+          currentResiduals <- (currentFeatures - muVals) / ranVals
+          
+          
+          time_iteration <- (time - period*feat_memory)
+          
+          lastAvg <- residAvg[[node]][feat_comb]
+          
+          residAvg[[node]][feat_comb] <- (residAvg[[node]][feat_comb] * (time_iteration - 1) + 
+                                 currentResiduals) / time_iteration
+          
+          residVar[[node]][feat_comb] <- (((time_iteration - 1) * residVar[[node]][feat_comb])
+                               + (currentResiduals - lastAvg) * (currentResiduals - residAvg[[node]][feat_comb])) / time_iteration        
+        }
+        
+        if(!is.null(currentResiduals)) {
+          monitorResiduals[[node]] <- cbind(monitorResiduals[[node]], currentResiduals)
+          currentValues[[node]] <- currentResiduals
+        }
+        
+        currentPeriodHistory <- shiftRightMatrix(currentPeriodHistory, 1)
+        currentPeriodHistory[, 1] <- currentFeatures
+        periodHistory[[node]][[currentPeriod]][feat_comb,] <- currentPeriodHistory
+        
+        
+        
+        baseValues[[node]][feat_comb,] <- cbind(residAvg[[node]][feat_comb], residVar[[node]][feat_comb])
       }
-   
+      
+      
+      if(time == 1000) {
+        
+        #print("debug")
+        
+        
+      }
+      #cluster of a node with these neighbors
+      
+      if(time > period * feat_memory + period * learning_iterations) {
+        
+        
+        cluster_scoring(priorities = node_scores, 
+                        current = currentValues, 
+                        base = baseValues)
+      }
+     
+      
       
     }
     
-    #cluster of a node with these neighbors
-    
-    if(time > period * feat_memory) {
-      print("Consider set of all features")
-      
-      print("Anomalous nodes: ")
-      
-      cluster_scoring(priorities = node_scores, 
-                      current = currentValues, 
-                      base = baseValues)
-    }
-  
     
   }
+  
+  plot(monitorResiduals[[3]][2,], type = "o")
   
 }
 
@@ -2043,8 +2126,8 @@ createTestNodeList <- function(node_number, feat_number, period = 24, period_num
   #5 nodes, each with 4 features, for 192 time slot
   for(i in c(1:node_number)) {
     
-    node <- createTestNode(mean = 2, range = 6, noise_level = 0.2, 
-                            feature_number = feat_number, period, period_number)
+    node <- createTestNode(mean = 0, range = 2, noise_level = 0.1, 
+                           feature_number = feat_number, period, period_number)
     
     nodeList <- c(nodeList, list(node))
     
@@ -2059,7 +2142,9 @@ createTestNode <- function(mean, range, noise_level, feature_number, period, per
   
   for(i in c(1:feature_number)) {
     
-    sinusoid <- sin(pi*(0:((period*period_number) - 1))/(period/2)) * (range / 2) + mean + runif(period*period_number, -noise_level, noise_level)
+    sinusoid <- sin(pi*(0:((period*period_number) - 1))/(period/2)) * (range / 2) + mean +
+      #  runif(period*period_number, -noise_level, noise_level)
+      rnorm(period*period_number, mean = 0, sd = noise_level)
     
     node <- rbind(node, sinusoid)
     
@@ -2075,25 +2160,29 @@ createTestNode <- function(mean, range, noise_level, feature_number, period, per
 #for multivariate: pass the correct subset of features
 #aggregated by feature
 #period history: for each j feature, remember m past elements from previous periods
-node_scoring <- function(currentPeriodHistory, currentFeatures) {
-    
+node_scoring <- function(currentPeriodHistory, currentFeatures, residAvg, residVar) {
+  
+  
   mu <- rowMeans(currentPeriodHistory)  
   sig2 <- rowSums((currentPeriodHistory - mu)^2)/(dim(currentPeriodHistory)[2] - 1)
   
+  ranl <- apply(currentPeriodHistory, 1, range)
+  ran <- ranl[2,] - ranl[1,]
   
-  Cim <- (currentFeatures * mu) / sig2
-  Bim <- (mu)^2 / sig2
   
-  #for reference
-  base <- cbind(mean = mu, variance = sig2)
+  
+  residuals <- (currentFeatures - mu) / ran
+  
+  Cim <- (residuals - residAvg) ^ 2 / residVar
+  Bim <- residVar / residVar
   
   
   #aggregate Cim and Bim
   Ci <- sum(Cim)
   Bi <- sum(Bim)
-  Xi <- sum(currentFeatures)
   
-  priority <- (Ci - Bi)^2 / 2 * Bi
+  
+  priority <- Ci
   
   return(priority)
   
@@ -2105,7 +2194,7 @@ node_scoring <- function(currentPeriodHistory, currentFeatures) {
 #current: list of n, values of current features for node.
 #base: list of n, matrix of j rows of column mu and sig2 
 
-cluster_scoring <- function(priorities, current, base) {
+cluster_scoring <- function(priorities, current, base, anomThreshold = 5) {
   
   #order priorities
   prior_order <- sort(priorities, decreasing = TRUE,index.return = T)$ix
@@ -2114,42 +2203,82 @@ cluster_scoring <- function(priorities, current, base) {
   C <- rep( 0  , length(prior_order))
   B <- rep( 0  , length(prior_order))
   
+  P <- rep( 0  , length(prior_order))
+  
   
   #in order, calculate F(S)
   for (size in c(1:length(prior_order))) {
     
     node <- prior_order[size]
     
-    vals <- current[[node]]
-    mus <- base[[node]][,1]
-    sigs <- base[[node]][,2]
-        
+    residuals <- current[[node]]
+    resAvgs <- base[[node]][,1]
+    resVars <- base[[node]][,2]
     
-    Cim <- (vals * mus) / sigs
-    Bim <- (mus)^2 / sigs
+    Cim <- (residuals - resAvgs) ^ 2 / resVars
+    Bim <- resVars / resVars
     
     Ci <- sum(Cim)
     Bi <- sum(Bim)
     
-    
     C[size:length(C)] <- C[size:length(C)] + Ci
     B[size:length(B)] <- B[size:length(B)] + Bi
-        
     
+    P[size:length(P)] <- P[size:length(P)] + priorities[node]
   }
   
-  final_scores <- (C - B)^2 / 2*B
+  #final_scores <- (C - B)^2 / (2*B)
+  
+  final_scores <- 0.5 * ( B * log( B / C ) + C - B )
   
   string <- NULL
   
+  #   #Full results
+  #   for(size in c(1:length(prior_order))) {
+  #     
+  #     string <- paste(string," ", prior_order[size])
+  #     
+  #     print(paste("Set ",size,", nodes (",string,"), score ",final_scores[size]))
+  #     
+  #     
+  #   }
+  #    
+  
+  
+  #Best result
+  
+  bestSize <- 0
+  bestScore <- 0
+  
   for(size in c(1:length(prior_order))) {
-    
-    string <- paste(string," ", prior_order[size])
-    
-    print(paste("Set ",size,", nodes (",string,"), score ",final_scores[size]))
-    
-    
+    if(final_scores[size] > bestScore) {
+      bestScore <- final_scores[size]
+      bestSize <- size  
+    }
   }
-    
-    
+  for(size in c(1:bestSize)) {
+    string <- paste(string," ", prior_order[size])
+  }
+  
+  if(bestScore > anomThreshold) {
+    print(paste("Set ",size,", nodes (",string,"), score ",bestScore))
+  }
+  
+  
+}
+
+powerset <- function(s){
+  
+  len <- length(s)
+  l <- vector(mode="list",length=2^len) ; 
+  l[[1]]=numeric()
+  counter <- 1
+  for(x in 1:length(s)) {
+    for(subset in 1:counter){
+      counter <- counter+1
+      l[[counter]] <- c(l[[subset]],s[x])
+    }
+  }
+  l[[1]] <- NULL
+  return(l)
 }
