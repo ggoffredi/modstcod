@@ -1,7 +1,8 @@
 
 #################################### Main Algorithm ##########################################
 
-#cluster = a table with rows of nodes in a cluster
+#cellData: list of n kpi, each containing a matrix for all element
+
 STCOD_Cluster2 <- function(cellData, period = 24, watch_node = 5, neigh_number = 5) {
   
   state_mem <- 5
@@ -23,8 +24,12 @@ STCOD_Cluster2 <- function(cellData, period = 24, watch_node = 5, neigh_number =
   
   cluster_update_rate <- 0.3
   
+  kpi_number <- length(cellData)
+  
   #for simplicity test without na
   cellData[is.na(cellData)] <- 0
+  
+  
   
   #following data is stored in list instead of matrix to simulate cell distributed behavior
   #element in a list[[1]] represents knowledge of node 1
@@ -506,13 +511,324 @@ STCOD_Cluster2 <- function(cellData, period = 24, watch_node = 5, neigh_number =
 }
 
 
+
+#node: index of node
+#curr_values: vector of n values, one for each kpi
+#prev_values: the curr_values of time - 1
+#cell_seasonality: list of n vectors (one for each kpi) of expected values for that period
+#time: current time slot
+#period: width of time period
+
+#returns: a list with a p-value for the node and each of the individual features
+
+nodeDetection <- function(node, curr_values, prev_values, cell_seasonality, time, period = 24) {
+  
+  
+  #check time slot
+  curr_period <- ((time - 1) %% period) + 1
+  
+  #read current and previous value (should be stored)
+  curr_value <- cellData[node, time]
+  if(time > 1) {
+    prev_value <- cellData[node,time - 1]
+  }
+  else {
+    prev_value <- 0
+  }
+  
+  #get cell seasonality
+  curr_value_season <- cell_seasonality[[node]][curr_period]
+  if(curr_period == 1) {
+    prev_value_season <- cell_seasonality[[node]][period]
+    prev_season_diff <- cell_season_diff[[node]][period]
+    prev_season_lon_diff <- cell_season_lon_diff[[node]][period]
+    prev_residual <- cell_residual[[node]][period]
+  }
+  else {
+    prev_value_season <- cell_seasonality[[node]][curr_period - 1]
+    prev_season_diff <- cell_season_diff[[node]][curr_period - 1]
+    prev_season_lon_diff <- cell_season_lon_diff[[node]][curr_period - 1]
+    prev_residual <- cell_residual[[node]][curr_period - 1]
+  }
+  
+  season_avg <- mean(cell_seasonality[[node]], na.rm = T)
+  season_rng <- (range(cell_seasonality[[node]])[2] - 
+                   range(cell_seasonality[[node]])[1])
+  
+  #if no season value exists, skip any check, consider node OK (learning phase)
+  if(time < period + 1) {
+    
+    
+    #update current state, shift previous for this node in its list
+    prev_state[[node]][node,] <- shiftRight(prev_state[[node]][node,] , 1)
+    prev_state[[node]][node,1] <- "OK"
+    
+    #initialize cell seasonality as same as the first period of values
+    cell_seasonality[[node]][curr_period] <- cellData[node,time]
+  }
+  #else check seasonality (wrt cell past seasons)
+  else {
+    
+    if((time > period * memory_periods) && node == watch_node) {
+      
+      print(fitnessCheck(cell_memories[[node]], curr_value, c(95,68), plot = TRUE))
+      
+    }
+    
+    
+    if(is.na(prev_season_diff)){
+      prev_season_diff <- 0
+    }
+    
+    #standardize comparison values from -1 to +1
+    
+    if(season_rng != 0) {
+      curr_value_std <- ((curr_value - season_avg)/(season_rng/2))
+      prev_value_std <- ((prev_value - season_avg)/(season_rng/2))
+      curr_value_season_std <- ((curr_value_season - season_avg)/(season_rng/2))
+      prev_value_season_std <- ((prev_value_season - season_avg)/(season_rng/2))
+    }
+    else {
+      curr_value_season_std <- ((curr_value_season - season_avg))
+      prev_value_season_std <- ((prev_value_season - season_avg))
+      curr_value_std <- ((curr_value - season_avg))
+      prev_value_std <- ((prev_value - season_avg))
+    }
+    
+    immediate_residual <- curr_value_std - prev_value_std
+    #immediate_residual <- curr_value - prev_value
+    season_residual <- curr_value_season_std - prev_value_season_std
+    #season_residual <- curr_value_season - prev_value_season
+    
+    
+    #residual in approximately range [-2,+2]
+    residual <- immediate_residual - season_residual
+    
+    
+    #stored for plotting
+    cell_residual[[node]][curr_period] <- residual
+    cell_val_std[[node]][curr_period] <- curr_value_std
+    
+    cell_acalc[[node]][curr_period] <- (abs(residual) + 1) ^ 2
+    
+    
+    shortCUSUM <- residual + (prev_season_diff * 0.6)
+    longCUSUM <- weighted.mean(c(prev_season_lon_diff, residual), c(0.6,1))
+    
+    
+    cell_season_diff[[node]][curr_period] <- shortCUSUM
+    cell_season_lon_diff[[node]][curr_period] <- (abs(shortCUSUM) + 1) ^ 2
+    
+    #if residual above threshold, OUT : cell changed behavior from past
+    if((abs(residual) + 1) ^ 2 > cell_threshold) {
+      
+      
+      #update current state, shift previous for this node in its list
+      prev_state[[node]][node,] <- shiftRight(prev_state[[node]][node,] , 1)
+      if(residual > 0)
+        prev_state[[node]][node,1] <- "OUT-up"
+      else
+        prev_state[[node]][node,1] <- "OUT-down"
+      
+      #update cell seasonality
+      cell_seasonality[[node]][curr_period] <- weighted.mean(
+        c(cell_seasonality[[node]][curr_period],cellData[node,time]),
+        c(1,cell_update_rate_OUT))
+      
+      
+    }
+    #else OK
+    else {
+      
+      if((abs(shortCUSUM) + 1) ^ 2 > diff_threshold) {
+        #difference is accumulating
+        #update current state, shift previous for this node in its list
+        prev_state[[node]][node,] <- shiftRight(prev_state[[node]][node,] , 1)
+        if(shortCUSUM > 0)
+          prev_state[[node]][node,1] <- "TREND-up"
+        else
+          prev_state[[node]][node,1] <- "TREND-down"
+        
+        #update cell seasonality
+        cell_seasonality[[node]][curr_period] <- weighted.mean(
+          c(cell_seasonality[[node]][curr_period],cellData[node,time]),
+          c(1,cell_update_rate_OUT))
+        
+      }
+      else{
+        #update current state, shift previous for this node in its list
+        prev_state[[node]][node,] <- shiftRight(prev_state[[node]][node,] , 1)
+        prev_state[[node]][node,1] <- "OK"
+        
+        #update cell seasonality
+        cell_seasonality[[node]][curr_period] <- weighted.mean(
+          c(cell_seasonality[[node]][curr_period],cellData[node,time]),
+          c(1,cell_update_rate_OK))
+      }          
+    }
+  }   
+  
+  #remember values
+  cell_memories[[node]] <- c(cell_memories[[node]][2:length(cell_memories[[node]])], curr_value)
+  #cell_memories[[node]] <- c(cell_memories[[node]][2:length(cell_memories[[node]])], cell_seasonality[[node]][curr_period])
+  
+  
+  
+}
+
+
+#returns: the pvalue of the value given the seasonality
+featureSeasonFitness <- function(feat_cell_seasonality, feat_curr_value, curr_period) {
+  
+  #shift cell seasonality to have last slot the previous value
+
+  #feat_cell_seasonality = [1,2,3, ... ,23,24]
+  #curr_period = 8
+  # ---> previous_seasonality <- [8,9,10, ... ,6,7]
+  
+  previous_seasonality <- shiftLeft(feat_cell_seasonality, num = (curr_period - 1))
+  
+  library(forecast)
+  
+  #fit an arima to the historical data
+  aa <- auto.arima(previous_seasonality)
+  ff <- forecast(aa, h = 1, level = c(68.27, 95.45))
+  
+  #find z-score (number of standard deviation of distance from forecast value)
+  fcasted <- ff$mean[1]
+  sdev <- abs(ff$lower[1] - ff$lower[2])
+  
+  zscore <- (feat_curr_value - fcasted) / sdev
+  
+  pval <- 2*pnorm(-abs(zscore))
+  
+  # (1 - pval) = minimum prediction interval threshold for given value, value within 1-pval most probable
+  # pval = value is predicted within the pval less probable outcom
+  
+  return (pval)  
+  
+}
+
+#returns: the pvalue of the value given the seasonality
+featureLastValuesFitness <- function(feat_cell_past_values, feat_curr_value) {
+  
+  #assumes last value in feat_cell_past_values is at the end
+  
+  library(forecast)
+  
+  
+  #fit an arima to the historical data
+  aa <- auto.arima(feat_cell_past_values)
+  ff <- forecast(aa, h = 1, level = c(68.27, 95.45))
+  
+  #find z-score (number of standard deviation of distance from forecast value)
+  fcasted <- ff$mean[1]
+  sdev <- abs(ff$lower[1] - ff$lower[2])
+  
+  zscore <- (feat_curr_value - fcasted) / sdev
+  
+  pval <- 2*pnorm(-abs(zscore))
+  
+  # (1 - pval) = minimum prediction interval threshold for given value, value within 1-pval most probable
+  # pval = value is predicted within the pval less probable outcom
+  
+  return (pval)  
+  
+}
+
+
+#returns: the pvalue of the value given the historical mean and sd for the period
+featureHistoryFitness <- function(feat_historical_period_mean, feat_historical_period_sd, feat_curr_value) {
+  
+
+  #find z-score (number of standard deviation of distance from historical value)
+  zscore <- (feat_curr_value - feat_historical_period_mean) / feat_historical_period_sd
+  
+  pval <- 2*pnorm(-abs(zscore))
+  
+  # (1 - pval) = minimum prediction interval threshold for given value, value within 1-pval most probable
+  # pval = value is predicted within the pval less probable outcom
+  
+  return (pval)  
+  
+}
+
+
+featureDistanceThresholdPVal <- function(feat_cell_season_val, feat_curr_value, distance_threshold, threshold_confidence) {
+
+  #threshold_confidence indicates it is expected that value falls
+  #within distance_threshold with that confidence
+  
+  residual <- feat_curr_value - feat_cell_season_val
+  
+  #given confidence of 95.45%, distance_treshold is 2 sd
+  #given confidence of x, distance_treshold is zscore(1 - x) * sd?
+  
+  sDev <- distance_threshold / qnorm(1 - (1 - threshold_confidence)/2 )
+  
+  zscore <- residual / sDev
+  pval <- 2*pnorm(-abs(zscore))
+  
+  return(pval)
+  
+}
+
+featureTrendThresholdPVal <- function(feat_cell_season_val, feat_prev_cell_season_val,
+                                      feat_curr_value, feat_prev_value, 
+                                      descent_threshold, 
+                                      threshold_confidence) {
+  
+  #threshold_confidence indicates it is expected that value falls
+  #within distance_threshold with that confidence
+  
+  curr_residual <- feat_curr_value - feat_prev_value
+  season_residual <- feat_cell_season_val - feat_prev_cell_season_val
+    
+  residual <- curr_residual - season_residual
+  
+  #given confidence of 95.45%, distance_treshold is 2 sd
+  #given confidence of x, distance_treshold is zscore(1 - x) * sd?
+  
+  sDev <- descent_threshold / qnorm(1 - (1 - threshold_confidence)/2 )
+  
+  zscore <- residual / sDev
+  pval <- 2*pnorm(-abs(zscore))
+  
+  return(pval)
+  
+}
+
+
 ######################################## Shift Functions #######################
 
 
 #shift cells of a vector one position to the right, with wrapping
+#shiftRight([1,2,3,4,5], num = 2) --> [4,5,1,2,3]
 shiftRight <- function(vec, num = 1) {
   
   vec <- c(vec[(length(vec) - num + 1):length(vec)],vec[1:(length(vec)-num)])
+  return(vec)
+  
+}
+
+#shift cells of a vector num position to the left, with wrapping
+#shiftLeft([1,2,3,4,5], num = 2) --> [3,4,5,1,2]
+#num must be < length(vec)
+
+shiftLeft <- function(vec, num = 1) {
+  
+  if(is.null(vec) || length(vec) < 1) {
+    return(NULL)
+  }
+  
+  while(num >= length(vec)) {
+    num <- num - length(vec)
+  }
+  
+  if(num > 0) {
+    vec <- c(vec[(1 + num) : length(vec)],vec[1:num])
+  }
+  
   return(vec)
   
 }
@@ -2011,20 +2327,22 @@ testFSS <- function() {
     currentPeriod <- ((time-1) %% period) + 1
     print(paste("Time ",time,", hour ",currentPeriod))
     
-    if(time == period*feat_memory + 1) {
+    if(time == period * feat_memory + learning_iterations * period + 1) {
       print("Start node scoring")
     }
     
     
-    node_scores <- NULL
+
     currentValues <- rep(list(NULL), node_number)
     baseValues <- rep(list(NULL), node_number)
     
     for(feat_comb in feat_combinations) {
       
+      node_scores <- NULL
+      
       for(node in c(1:node_number)) {
         
-        
+
         currentPeriodHistory <- matrix(periodHistory[[node]][[currentPeriod]][feat_comb,], nrow = length(feat_comb))
         currentFeatures <- nodeList[[node]][feat_comb,time]
         currentResiduals <- NULL
@@ -2075,20 +2393,18 @@ testFSS <- function() {
           
           residVar[[node]][feat_comb] <- (((time_iteration - 1) * residVar[[node]][feat_comb])
                                + (currentResiduals - lastAvg) * (currentResiduals - residAvg[[node]][feat_comb])) / time_iteration        
+      
         }
         
         if(!is.null(currentResiduals)) {
-          monitorResiduals[[node]] <- cbind(monitorResiduals[[node]], currentResiduals)
+         
+          #monitorResiduals[[node]] <- cbind(monitorResiduals[[node]], currentResiduals)
           currentValues[[node]] <- currentResiduals
+        
         }
         
-        currentPeriodHistory <- shiftRightMatrix(currentPeriodHistory, 1)
-        currentPeriodHistory[, 1] <- currentFeatures
-        periodHistory[[node]][[currentPeriod]][feat_comb,] <- currentPeriodHistory
-        
-        
-        
-        baseValues[[node]][feat_comb,] <- cbind(residAvg[[node]][feat_comb], residVar[[node]][feat_comb])
+        baseValues[[node]] <- cbind(residAvg[[node]][feat_comb], residVar[[node]][feat_comb])
+      
       }
       
       
@@ -2106,6 +2422,8 @@ testFSS <- function() {
         cluster_scoring(priorities = node_scores, 
                         current = currentValues, 
                         base = baseValues)
+      
+      
       }
      
       
@@ -2113,9 +2431,18 @@ testFSS <- function() {
     }
     
     
+    for ( node in c(1:node_number)) {
+    
+    currentPeriodHistory <- shiftRightMatrix(currentPeriodHistory, 1)
+    currentPeriodHistory[, 1] <- nodeList[[node]][,time]
+    periodHistory[[node]][[currentPeriod]] <- currentPeriodHistory
+    
+    }
+    
+    
   }
   
-  plot(monitorResiduals[[3]][2,], type = "o")
+  #plot(monitorResiduals[[3]][2,], type = "o")
   
 }
 
