@@ -339,14 +339,14 @@ STCOD_Cluster2 <- function(cellData, period = 24, watch_node = 5, neigh_number =
         }
         if(time >= startMemoryCheck) {
           if(selectMethod[4] == TRUE) {
-          multivariateMethodPriority <- c(multivariateMethodPriority, 
-                                          fisherCombinedPriority(previous_fit))
+            multivariateMethodPriority <- c(multivariateMethodPriority, 
+                                            fisherCombinedPriority(previous_fit))
           }
         }
         if(time >= startHistoryCheck) {
           if(selectMethod[5] == TRUE) {
-          multivariateMethodPriority <- c(multivariateMethodPriority, 
-                                          fisherCombinedPriority(history_fit))
+            multivariateMethodPriority <- c(multivariateMethodPriority, 
+                                            fisherCombinedPriority(history_fit))
           }
         }
         
@@ -1024,6 +1024,159 @@ fisherCombinedPriority <- function(pvector) {
   
 }
 
+#input: weights, and the pvalues
+#Returns fisher combined test (higher = worse!) a priority
+fisherWeightedCombinedPriority <- function(weights, pvector) {
+  
+  if(max(weights) > 1) {
+    weights <- weights / max(weights)
+  }
+  
+  priorities <- 1 - pvector
+  #wpriorities <- weights * priorities
+  wpriorities <- pchisq(qgamma(priorities, shape = weights / 2, scale = 2), df = 1)
+  wpvalues <- 1 - wpriorities
+  
+  #Fisher's combined probability test
+  #
+  fisher <- pchisq(-2 * (sum(log(wpvalues))), df = 2*length(pvector))
+  
+  return(fisher)
+  
+}
+
+
+#input: weights and pvalues
+#weights are normalized to sum to 1 before applying
+#Returns lancaster generalized fisher test, a priority
+lancasterGeneralizedFisher <- function(weights, pvalues) {
+  
+  weights <- weights / sum(weights)
+  
+  priorities <- 1 - pvalues
+  
+  lancaster <- pchisq( sum(qgamma(priorities, shape = weights / 2, scale = 2)),
+                       df = sum(weights))
+  
+  return(lancaster)
+  
+}
+
+testLancaster <- function() {
+  
+  lancaster_growth <- NULL
+  
+  for(i in 1:100) {
+    
+    #assume growing weights*priority
+    i <- i/100
+    
+    pi <- runif(1,0,1)
+    wi <- i / pi
+    
+    
+    
+    #thus we have wi*pi = i, therefore growing at each iteration
+    #let's check that wi*pi can be a valid priority metric (combined priority raises with it - convexity)
+    
+    lancaster_growth <- c(lancaster_growth,
+                          lancasterGeneralizedFisher(c(0.5, wi), c(0.7, pi)))
+    
+    
+  }
+  
+  
+  return(lancaster_growth)
+  
+}
+
+testLancaster2 <- function() {
+  
+  lancaster_growth <- NULL
+  gamma_growth <- NULL
+  
+  for(i in 1:100) {
+    
+    #generate random weight and pvalues
+    
+    wi <- runif(1,0,1)
+    pi <- runif(1,0,1)
+    
+    #generate quality (G(s))
+    gamma_growth <- c(gamma_growth, qgamma(1 - pi, shape = wi / 2, scale = 2))
+    
+    lancaster_growth <- c(lancaster_growth,
+                          lancasterGeneralizedFisher(c(0.5, wi), c(0.7, pi)))
+    
+    
+  }
+  
+  #let's check if ordering lancaster_growth according to gamma_growth yields results
+  
+  sortorder <- sort.int(gamma_growth, index.return = T)$ix
+  lancaster_ord <- lancaster_growth[sortorder]
+  
+  return(lancaster_ord)
+  
+}
+
+testWeightedFisher <- function() {
+  
+  fisher_growth <- NULL
+  
+  for(i in 1:100) {
+    
+    #assume growing weights*priority
+    i <- i/100
+    
+    pi <- runif(1,0,1)
+    wi <- i / pi
+    
+    #thus we have wi*pi = i, therefore growing at each iteration
+    #let's check that wi*pi can be a valid priority metric (combined priority raises with it - convexity)
+    
+    fisher_growth <- c(fisher_growth,
+                       fisherCombinedPriority(c(0.6*0.8, 1 - wi*pi)))
+    
+    
+    
+  }
+  
+  return(fisher_growth)
+  
+}
+
+testWeightedFisher2 <- function() {
+  
+  fisher_growth <- NULL
+  weighted_growth <- NULL
+  
+  for(i in 1:1000) {
+    
+    #Calculate random weights and pvalues
+    wi <- runif(1,0,1)
+    pi <- runif(1,0,1)
+    
+    #Calculate priority from weight and pval
+    #for a confidence threshold of 0.35
+    confid <- 0.35
+    powered <-  pwr((pi - confid) , 1 / wi) + confid
+    weighted_growth <- c(weighted_growth, 1 - powered)
+    
+    fisher_growth <- c(fisher_growth,
+                       fisherCombinedPriority(c(0.8, powered)))
+    
+  }
+  
+  #let's check if ordering lancaster_growth according to gamma_growth yields results
+  
+  sortorder <- sort.int(weighted_growth, index.return = T)$ix
+  fisher_ord <- fisher_growth[sortorder]
+  
+  
+  return(fisher_ord)
+  
+}
 
 #returns: the pvalue of the value given the seasonality
 #replicas: the function replicates the seasonality for a number of time to achieve better regression model (danger of overfitting!)
@@ -3214,4 +3367,545 @@ testBest <- function(myData, window) {
   }
   
   return(result)
+}
+
+############################### Weighting Fun ############
+
+
+pgam <- function(shape, scaleFactor) {
+  
+  i <- 1:100
+  i <- i / 100
+  
+  plot(i,i, type = "l")
+  points(i, pgamma(i, shape = shape, scale = 1 / (shape * scaleFactor)), col = "red", type = "l")
+  
+}
+
+qgam <- function(shape, scaleFactor, scale = NULL) {
+  
+  i <- 1:100
+  i <- i / 100
+  
+  plot(i,i, type = "l")
+  if(is.null(scale)) {
+    points(i, qgamma(i, shape = shape, scale = 1 / (shape * scaleFactor)), col = "red", type = "l")
+    
+  }
+  else {
+    points(i, qgamma(i, shape = shape, scale = scale), col = "red", type = "l")
+    
+  }
+}
+
+pwr <- function(x, exp) {
+  
+  return (sign(x) * abs(x) ^ exp)
+  
+  #return (sign(x) * exp ^ abs(x))
+  
+  
+}
+
+ppower <- function(confid, weight) {
+  
+  i <- 1:10000
+  i <- i / 10000
+  
+  #   correctConfid <- confid
+  #   
+  #   myPower <- pwr(i - correctConfid, 1 / weight)
+  #   #myPower  <- (myPower * 1/weight)  + confid
+  #   
+  #   myPower <- ( myPower - min(myPower)) / (max(myPower) - min(myPower))
+  #   
+  #   confidIndex <- which(myPower == 0)
+  #   myPower[1:(confidIndex - 1)] <- myPower[1:(confidIndex - 1)] + 1
+  #   myPower[(confidIndex + 1):length(myPower)] <- myPower[(confidIndex + 1):length(myPower)] - 1
+  #   
+  #   #myPower[1:confidIndex] <- myPower[1:confidIndex] - ((confidIndex - c(1:confidIndex)) / confidIndex)  * myPower[1]
+  #myPower[confidIndex:length(myPower)] <- myPower[confidIndex:length(myPower)] + (abs(confidIndex - c(confidIndex:length(myPower)))/ abs(length(myPower) - confidIndex)) * (1 - myPower[length(myPower)])
+  
+  
+  plot(i,i, type = "l")
+  points(i, (pwr((i - confid) , 1 / weight) + confid), type = "l", col = "red")
+  #points(i, myPower, type = "l", col = "red")
+  
+  points(i, myPower, col = "green", type = "l")
+  
+  
+  
+}
+
+sigmoid <- function(confid, k) {
+  
+  i <- 1:10000
+  i <- i / 10000
+  
+  pin <- ( 1 / (1 + exp((k * -(i - confid)))  ))
+  pin <- (pin - min(pin)) / (max(pin) - min(pin))
+  
+  reflex <- i + (i - pin)
+  
+  
+  plot(i,i,type = "l")
+  points(i, pin, col = "red", type = "l")
+  
+  
+  
+}
+
+logit <- function(confid, k) {
+  
+  i <- 1:10000
+  i <- i / 10000
+  
+  pin <- - log( (1 / k*(i - confid) - 1))
+  pin <- (pin - min(pin)) / (max(pin) - min(pin))
+  
+  reflex <- i + (i - pin)
+  
+  
+  plot(i,i,type = "l")
+  points(i, pin, col = "red", type = "l")
+  
+  
+  
+}
+
+
+################################## PSF + Motifs #############
+
+
+#Single time series (or multi? in that case on which subset of neighbors, and how to incorporate weights?)
+#Input: a single time series (do not deseason), a vector
+psf_label_set <- function(training_set, min_k = 1, max_k = 20) {
+  
+  lab_set <- NULL
+  
+  for(row in (1:nrow(training_set))) {
+    
+    lab_set <- rbind(lab_set, psf_label_series(training_set[row,], min_k, max_k))
+    
+  }
+  
+  return(lab_set)
+}
+
+psf_label_series <- function(training_series, min_k = 1, max_k = 20) {
+  
+  library(fpc) # for pamk
+  
+  #pamk to find best k labels to describe (original: day wrt to year; mine: hour\ set of hours)
+  
+  pamcl <- pamk(training_series, krange = c(min_k:max_k))
+  
+  
+  labeled_training_series <- pamcl[[1]]$clustering
+  bestK <- pamcl$nc
+  
+  #print(paste(bestK))
+  return(labeled_training_series)
+  
+}
+
+#Single time series \ multi
+#Input: A set of NEIGHBORING (this is to be done BEFORE psf_forecast) training_series, 
+# their labeled counterpart (via psf_label_set), the window_size to be used, 
+# the index of the day to be forecast, weights according to similarity of neighbors. 
+# The first series in training_set is considered the calculating node.
+psf_forecast<- function(training_set, label_set, window_size, current_day, offset = 1, weight_set = NULL) {
+  
+  main_dist_threshold <- 0
+  neigh_dist_threshold <- 0
+  
+  #PSF
+  
+  #assumes current_day >= window_size + offset
+  
+  #find in training_set, windows with same labels as window before current_day
+  ##check if windows of nearest neighbors are also similar
+  
+  confirmed_match <- NULL
+  confirmed_match_number <- 0
+  weight_match <- NULL
+  
+  perfect_match <- 1
+  close_match <- 0.8
+  far_match <- 0.5
+  
+  while(confirmed_match_number <= 0 && window_size >= 1) {
+    
+    windowed_set <- as.matrix(label_set[, c((current_day - window_size - offset + 1) : (current_day - offset))])
+    
+    
+    for(t in c((window_size + offset):ncol(label_set))) {
+      if(t != current_day) {
+        
+        #How many categorical labels are different?
+        main_distance <- length(which(windowed_set[1,] != label_set[1,((t - window_size - offset + 1) : (t - offset))]))
+        neigh_distance <- length(which(windowed_set[-1,] != label_set[-1,((t - window_size - offset + 1) : (t - offset))]))
+        
+        if(main_distance <= main_dist_threshold) {
+          
+          #found matching self
+          
+          confirmed_match <- c(confirmed_match, training_set[1,t])
+          confirmed_match_number <- confirmed_match_number + 1 
+          
+          if(neigh_distance <= neigh_dist_threshold) {
+            
+            #matches both own history and neigh history
+            weight_match <- c(weight_match, perfect_match)
+            
+          }
+          else {
+            
+            #matches own history, not neighborhood
+            weight_match <- c(weight_match, close_match)
+            
+          }
+          
+        }
+        else if(neigh_distance <= neigh_dist_threshold) {
+          
+          confirmed_match <- c(confirmed_match, training_set[1,t])
+          confirmed_match_number <- confirmed_match_number + 1 
+          
+          #matches neigh history, not own... outlier?
+          weight_match <- c(weight_match, far_match)
+          
+        }
+      }
+    }
+    
+    if(confirmed_match_number <= 0) {
+      #retry with smaller window
+      window_size <- window_size - 1
+      
+    }
+    
+    
+  }
+  
+  #forecast average between all found values
+  ##weight average according to similarity of context too (nearest neighbor window)
+  
+  fc <- weighted.mean(confirmed_match, weight_match)
+  
+  return(fc)
+  
+}
+
+
+bestWindowDiscovery <- function(training_set, n, offset = 1, max_window = 24, minK = 1, maxK = 24, return_error = FALSE) {
+  
+  #training_set subdivsion, for cross_validation
+  
+  #Because of the time relationship, must split the set in meaningful chunks
+  cross_validation_sets <- NULL
+  #note that the smaller the resulting width after dividing the set, the smaller the
+  #window size can be!    max_window_size <= width - offset   !!! 
+  
+  width <- floor(ncol(training_set) / n)
+  
+  for(i in (1:n)) {
+    
+    cross_validation_sets <- c(cross_validation_sets,
+                               list(training_set[,(((i-1)*width + 1) : (i*width))]))
+    
+  }
+  #OR signal error
+  max_window_size <- min(max_window, width - offset)
+  maxK <- min(maxK, width - 1)
+  
+  best_window_error <- Inf
+  best_window_size <- 0
+  
+  #Find best window size
+  for(window_size in c(1:max_window_size)) {
+    
+    expected_fold_errors <- NULL
+    
+    for(n_fold in (1:n)) {
+      
+      n_set <- cross_validation_sets[[n_fold]]
+      lab_set <- psf_label_set(n_set,minK,maxK)
+      
+      time_errors <- NULL
+      
+      for(t in ((window_size + offset):ncol(n_set))) {
+        
+        #forecast and calculate error
+        forec <- psf_forecast(n_set, lab_set, window_size, current_day = t, offset = offset)
+        #calc error of day in remaining month
+        time_errors <- c(time_errors, abs(forec - n_set[1,t]))
+        
+      }
+      #calculate error with this window size for this fold
+      expected_fold_errors <- c(expected_fold_errors, mean(time_errors, na.rm = T))
+      
+    }
+    #calculate expected error for this window size
+    expected_window_error <- mean(expected_fold_errors)
+    
+    #find best window size, minimizing expected_window_error
+    if(expected_window_error < best_window_error) {
+      best_window_size <- window_size
+      best_window_error <- expected_window_error
+    }
+    
+    
+  }
+  
+  if(return_error == FALSE) {
+    return(best_window_size)
+  }
+  else {
+    
+    return(list(win_size = best_window_size,
+                exp_error = best_window_error))
+    
+  }
+}
+
+
+
+motif_discovery <- function(training_set, n, offset = 1, max_window = 24, min_k = 1, max_k = 24) {
+  
+  
+  
+  motif_set <- NULL
+  candidate_set <- NULL
+  outlier_set <- NULL
+  
+  lab_set <- psf_label_set(training_set, min_k, max_k)
+  window_disc <- bestWindowDiscovery(training_set, n, offset, max_window, min_k, max_k, return_error = TRUE)
+  
+  window_size <- window_disc$win_size
+  exp_error <- window_disc$exp_error
+  
+  time_errors <- rep(0, window_size + offset - 1)
+  
+  #for each time slot, calculate error and find candidate_set
+  for(time in ((window_size + offset): ncol(training_set))) {
+    
+    forec <- psf_forecast(training_set, lab_set, window_size, current_day = time, offset = offset)
+    error <- abs(forec - training_set[1,time])
+    
+    time_errors <- c(time_errors, error)
+    
+    #if error more than average, add time to candidate set
+    if(error > exp_error) {
+      candidate_set <- c(candidate_set, time)
+    }
+    
+    
+  }
+  
+  #deal with NaN ..?
+  #NaN = not predicted = max error, unique motifs
+  nan_candidate <- which(is.nan(time_errors))
+  
+  #cluster candidate_set over error, use highest priority cluster the ones with higher deviation from forecast (error)
+  
+  cluster_candidate <- kmeans(time_errors[candidate_set], centers = 3)
+  sorted_cluster_means <- sort(cluster_candidate$centers, decreasing = TRUE, index.return = TRUE)$ix
+  candidate_set_h <- candidate_set[which(cluster_candidate$cluster == sorted_cluster_means[1])]
+  candidate_set_m <- candidate_set[which(cluster_candidate$cluster == sorted_cluster_means[2])]
+  candidate_set_l <- candidate_set[which(cluster_candidate$cluster == sorted_cluster_means[3])]
+  
+  
+  main_dist_threshold <- 0
+  neigh_dist_threshold <- 0
+  
+  
+  
+  for(cand in (candidate_set_h)) {
+    
+    #find motifs (windows) before candidate_set.
+    ##find windows of nn too
+    candidate_motif <- as.matrix(lab_set[, (cand - offset - window_size +1):(cand - offset)])
+    
+    
+    matches <- 1
+    confirmed <- TRUE
+    
+    for(t in c((window_size + offset):ncol(lab_set))) {
+      
+      #How many categorical labels are different?
+      main_distance <- length(which(candidate_motif[1,] != lab_set[1,((t - window_size - offset + 1) : (t - offset))]))
+      neigh_distance <- length(which(candidate_motif[-1,] != lab_set[-1,((t - window_size - offset + 1) : (t - offset))]))
+      
+      if(main_distance <= main_dist_threshold) {
+        
+        #found match
+        #If the motif only appear before candidates, consider it a valid motif (with given support), if not discard it
+        ##check motif of nn too
+        
+        
+        if(neigh_distance <= neigh_dist_threshold) {
+          
+          if(!(t %in% candidate_set)) {
+            #motif appears before normal data
+            confirmed <- FALSE
+            
+          }
+          else {
+            #perfect match on another candidate
+            #increase support
+            matches <- matches + 1
+          }
+          
+        }
+        else {
+          
+          #matches own history, not neighborhood        
+          
+          if(!(t %in% candidate_set)) {
+            #motif appears before normal data
+            confirmed <- FALSE
+            
+          }
+          else {
+            #close match on another candidate
+            #increase support
+            matches <- matches + 1
+          }
+          
+        }
+        
+      }
+      else if(neigh_distance <= neigh_dist_threshold) {
+        
+        
+        #matches neigh history, not own... outlier?            
+        if(!(t %in% candidate_set)) {
+          #motif appears before normal data
+          confirmed <- FALSE
+          
+        }
+        else {
+          #far match on another candidate
+          #increase support
+          matches <- matches + 1
+        }
+        
+      }
+    }
+    
+    if(confirmed == TRUE) {
+      
+      outlier_set <- c(outlier_set, cand)
+      motif_set <- c(motif_set, list(candidate_motif))
+      
+    }
+  }
+  
+#   
+#   plot(lab_set)
+#   points(outlier_set, lab_set[outlier_set], col = "red")
+#   points()
+#   
+
+  return(motif_set)
+  
+  
+}
+
+######## TEST SET GENERATION ###########
+
+#Generates a single time series with given parameters
+generateTimeSeries <- function(mean = 0, range = 1, periodicity = 24, noise = range/5, end = periodicity * 30, start_shift = 0, type = "sinusoid") {
+  
+  series <- NULL
+  
+  if(type == "sinusoid") {
+  series <- sin(pi*(c((0:(end-1)) + start_shift)/(periodicity/2)) ) * range + mean + runif(end, -noise, +noise)
+  }
+  return(series)
+  
+  
+}
+
+#Generates a matrix of n time series related to same feature
+generateFeatureSets <- function(location_number, mean = 0, range = 1, periodicity = 24, noise = range/5, end = periodicity * 30, start_shift = 0, type = "sinusoid") {
+  
+  set <- NULL
+  
+  for(i in (1:location_number)) {
+    
+    set <- rbind(set, generateTimeSeries(mean, range, periodicity, noise, end, start_shift, type))
+    
+  }
+  
+  return(set)
+  
+  
+}
+
+
+#adds a random noise to a series, between start and end indices
+#dir values: "two" adds noise in both directions; "up" and "down" adds only positive or negative noise
+series.addNoise <- function(series, noise = ( max(series) - min(series) ) / 10, 
+                            start = 1, end = length(series), dir = "two") {
+  
+  min_noise <- -noise
+  max_noise <- noise
+  
+  if(dir == "up") {
+    min_noise  <- 0
+  }
+  if(dir == "down") {
+    max_noise <- 0    
+  }
+  
+  series[start:end] <- series[start:end] + runif(length(start:end), min_noise, max_noise)
+  
+
+  return(series)
+  
+}
+
+#generates random coordinates
+generateCoordinates <- function(loc_number, min_x = 0, max_x = 1, min_y = 0, max_y = 1) {
+  
+  coord <- NULL
+  
+  for(i in (1:loc_number)) {
+    
+    newcoord <- c(runif(1, min_x, max_x), runif(1, min_y, max_y))
+    
+    coord <- rbind(coord, newcoord)
+    
+    
+  }
+  
+  return(coord)
+  
+}
+
+#adds a random noise to all series, between start and end indices, within
+# a range from a center
+
+set.addNoiseArea <- function(set, coordinates, center, range, noise = NULL, start = 1, end = ncol(set), dir = "two", proportional = F) {
+  
+  #find node_numbers of nodes within range to center
+  distances <- dist(rbind(center,coordinates))[1:nrow(coordinates)]
+  node_numbers <- which(distances < range)
+  
+  #add noise to selected nodes
+  for(n in node_numbers) {
+    if(is.null(noise)) {
+      noise  <- (max(set[n,]) - min(set[n,])) / 10
+    }
+    if(proportional == T) {
+      noise <- noise * (1 - (distances[n] / range))
+      
+    }
+    set[n,] <- series.addNoise(set[n,], noise, start, end, dir)
+  }
+  
+  return(set)
+  
 }
