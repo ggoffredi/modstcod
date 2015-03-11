@@ -3,24 +3,13 @@
 
 #cellData: list of n kpi, each containing a matrix for all element
 #neigh_number: includes self in count of neighborhood
-STCOD_Cluster2 <- function(cellData, coordinates, period = 24, watch_node = 5, neigh_number = 20, visual = FALSE, methodAct = NULL, motif_discovery = FALSE, NA_strat = "zero") {
+STCOD_Cluster2 <- function(cellData, trainingData = NULL, coordinates, period = 24, watch_node = 5, neigh_number = 20, visual = FALSE, 
+                           methodAct = NULL, motif_discovery = FALSE, NA_strat = "local_mean",
+                           anomaly_window = 4, anomaly_window_collection = TRUE, festive) {
   
   state_mem <- 5
   
-  genAnomaly <- FALSE
-  
-  
-  cell_threshold <- 2.5
-  diff_threshold <- 2
-  vote_threshold <- 1
-  similarity_threshold <- 0.5
   confidence_threshold <- 0.997
-  
-  cell_update_rate_OK <- 0.6
-  cell_update_rate_OUT <- 0.25
-  
-  cluster_update_rate <- 0.3
-  
   
   memory_periods <- 3
   history_periods <- 3
@@ -46,6 +35,7 @@ STCOD_Cluster2 <- function(cellData, coordinates, period = 24, watch_node = 5, n
   
   
   startSeasonCheck <- period + 1
+  startTrendCheck <- startSeasonCheck
   startHistoryCheck <- (history_periods * period) + 1
   startMemoryCheck <- (memory_periods * period) + 1
   
@@ -54,12 +44,12 @@ STCOD_Cluster2 <- function(cellData, coordinates, period = 24, watch_node = 5, n
   
   distance_threshold <- 1
   descent_threshold <- 1
-  threshold_confidence <- 0.842
+  threshold_confidence <- 0.63
   
   #indicates quality of method
   method_weight <- rep(list(matrix(1, nrow = method_number, ncol = kpi_number)), node_number)
   
-  anomaly_significance <- 0.9545
+  anomaly_significance <- 0.997
   max_priority <- 0.999999
   
   
@@ -69,9 +59,17 @@ STCOD_Cluster2 <- function(cellData, coordinates, period = 24, watch_node = 5, n
   #this is redundant in this algorithm, as cluster_season_sample and prev_state should be the same
   
   #seasonality data
-  cluster_seasonality <- rep(list(vector("numeric", length = period)), node_number)
   cell_seasonality <- rep(list(matrix(rep(0, kpi_number*period), 
                                       nrow = kpi_number, ncol = period)), node_number)
+  
+  cell_F_seasonality <- rep(list(matrix(rep(0, kpi_number*period), 
+                                        nrow = kpi_number, ncol = period)), node_number)
+  
+  cell_seasonality_sd <- rep(list(matrix(rep(0, kpi_number*period), 
+                                         nrow = kpi_number, ncol = period)), node_number)
+  cell_F_seasonality_sd <- rep(list(matrix(rep(0, kpi_number*period), 
+                                           nrow = kpi_number, ncol = period)), node_number)
+  
   
   #previous values
   cell_memories <- rep(list(matrix(rep(0, kpi_number *(period*memory_periods)), 
@@ -81,6 +79,11 @@ STCOD_Cluster2 <- function(cellData, coordinates, period = 24, watch_node = 5, n
   #historical values
   cell_historical_mean <- rep(list(vector("numeric", length = kpi_number)), node_number)
   cell_historical_sd <- rep(list(vector("numeric", length = kpi_number)), node_number)
+  cell_F_historical_mean <- rep(list(vector("numeric", length = kpi_number)), node_number)
+  cell_F_historical_sd <- rep(list(vector("numeric", length = kpi_number)), node_number)
+  
+  
+  
   cell_descent_historical_mean <- rep(list(vector("numeric", length = kpi_number)), node_number)
   cell_descent_historical_sd <- rep(list(vector("numeric", length = kpi_number)), node_number)
   
@@ -106,6 +109,7 @@ STCOD_Cluster2 <- function(cellData, coordinates, period = 24, watch_node = 5, n
   node_priority <- rep(list(vector("numeric", length = neigh_number)), node_number)
   node_motifs <- rep(list(NULL), node_number)
   anomaly_motifs <- rep(list(NULL), node_number)
+  anomaly_collection <- rep(list(rep(list(NULL), node_number)), kpi_number)
   anomaly_times <- rep(list(NULL), node_number)
   priority_history <- matrix(,nrow = node_number, ncol = (anomaly_testing_time - 1))
   
@@ -115,18 +119,54 @@ STCOD_Cluster2 <- function(cellData, coordinates, period = 24, watch_node = 5, n
   bestK <- NULL
   bestLevels <- rep(list(NULL), node_number)
   
+  #################### ALGORITHM
+  
+  skipTraining <- FALSE
+  
+  if(!is.null(trainingData)) {
+    skipTraining <- TRUE
+    
+    cell_seasonality <- trainingData$seasonality
+    cell_F_seasonality <- trainingData$F_seasonality
+    cell_seasonality_sd <- trainingData$season_sd
+    cell_F_seasonality_sd <- trainingData$F_season_sd
+    cell_historical_mean <- trainingData$hist_mean
+    cell_historical_sd <- trainingData$hist_sd
+    cell_F_historical_mean <- trainingData$F_hist_mean
+    cell_F_historical_sd <- trainingData$F_hist_sd
+    
+    cell_descent_historical_mean <- trainingData$descent_mean
+    cell_descent_historical_sd <- trainingData$descent_sd
+    cell_distance_historical_mean <- trainingData$distance_mean
+    cell_distance_historical_sd <- trainingData$distance_sd
+    
+  }
   
   
   #NA_STRATEGY
   if(NA_strat == "zero") {
-  
+    
     #for simplicity test without na
     for(feature in 1:length(cellData)) {
       cellData[[feature]][is.na(cellData[[feature]])] <- 0
       
     }
   }
+  else if (NA_strat == "local_mean") {
+    for(feature in 1:length(cellData)) {
+      
+      cellData[[feature]] <- halfNA(cellData[[feature]])
+      
+      #what can't be imputed put to 0
+      cellData[[feature]][is.na(cellData[[feature]])] <- 0
+    }    
+    
+  }
   
+  #stop using data.frame
+  for(feature in 1:length(cellData)) {
+    cellData[[feature]] <- as.matrix(cellData[[feature]])
+  }
   
   #initialize neighbors
   
@@ -152,6 +192,14 @@ STCOD_Cluster2 <- function(cellData, coordinates, period = 24, watch_node = 5, n
   
   #find bestK to partition a time series
   
+  if(skipTraining == T) {
+    
+    startSeasonCheck <- 1
+    startHistoryCheck <- 1
+    startTrendCheck <- 2
+  }
+  
+  anomaly_clusters <- rep(list(NULL), final_timeslot)
   
   for(time in (1:final_timeslot)) {
     
@@ -168,6 +216,12 @@ STCOD_Cluster2 <- function(cellData, coordinates, period = 24, watch_node = 5, n
       
       #check time slot
       curr_period <- ((time-1) %% period) + 1
+      
+      #check if festive
+      curr_day <- floor((time-1)/period) + 1
+      festivity <- festive[curr_day]
+      
+      
       curr_values <- vector("numeric", length = kpi_number)
       
       
@@ -196,29 +250,38 @@ STCOD_Cluster2 <- function(cellData, coordinates, period = 24, watch_node = 5, n
         
         curr_values[kpi] <- cellData[[kpi]][node, time]
         
+        if(festivity) {
+          curr_seasonality <- cell_F_seasonality[[node]][kpi,]
+          
+        }
+        else {
+          curr_seasonality <- cell_seasonality[[node]][kpi,]
+          
+        }
+        
         if(time >= startSeasonCheck) {
           
           if(selectMethod[1] == TRUE) {
-            season_fit[kpi] <- featureSeasonFitness(cell_seasonality[[node]][kpi,],
+            season_fit[kpi] <- featureSeasonFitness(curr_seasonality,
                                                     curr_values[kpi],
                                                     curr_period, replicas = 3, visual = visual)
           }
           
           #find standardized values for distance and trend
-          season_avg <- mean(cell_seasonality[[node]][kpi,])
-          season_rng <- (range(cell_seasonality[[node]][kpi,])[2] 
-                         - range(cell_seasonality[[node]][kpi,])[1]) / 2
+          season_avg <- mean(curr_seasonality)
+          season_rng <- (range(curr_seasonality)[2] 
+                         - range(curr_seasonality)[1]) / 2
           
           if(season_rng < min_difference ) {
             season_rng <- min_difference
           }
           
           curr_val_std <- (curr_values[kpi] - season_avg) / season_rng 
-          curr_season_std <- (cell_seasonality[[node]][kpi,curr_period] - season_avg) / season_rng 
+          curr_season_std <- (curr_seasonality[curr_period] - season_avg) / season_rng 
           
           dist <- curr_val_std - curr_season_std
           
-
+          
           
           if(curr_period > 1) {
             last_period <- curr_period - 1 
@@ -228,44 +291,59 @@ STCOD_Cluster2 <- function(cellData, coordinates, period = 24, watch_node = 5, n
           }
           
           
+          if(skipTraining == FALSE) {
+            
+            
+            last_distance_mean <- cell_distance_historical_mean[[node]][kpi]
+            
+            cell_distance_historical_mean[[node]][kpi] <- (cell_distance_historical_mean[[node]][kpi] * (time - 1) +
+                                                             dist) / time
+            cell_distance_historical_sd[[node]][kpi] <- sqrt((((time - 1) * (cell_distance_historical_sd[[node]][kpi] ^2) ) 
+                                                              + (dist - last_distance_mean) * (dist - cell_distance_historical_mean[[node]][kpi])) / time)
+            
+            if(is.nan(cell_distance_historical_sd[[node]][kpi])) {
+              cell_distance_historical_sd[[node]][kpi] <- 0
+            }
+          }
+          
+          
+          
+          
+        }
+        
+        if(time >= startTrendCheck) {
+          
+          
           prev_val_std <- (cell_memories[[node]][kpi,ncol(cell_memories[[node]])] - season_avg) / season_rng 
-          prev_season_std <- (cell_seasonality[[node]][kpi,last_period] - season_avg) / season_rng 
+          prev_season_std <- (curr_seasonality[last_period] - season_avg) / season_rng 
           
           residual <- (curr_val_std - prev_val_std) - (curr_season_std - prev_season_std)
           
-          last_descent_mean <- cell_descent_historical_mean[[node]][kpi]
-          
-          cell_descent_historical_mean[[node]][kpi] <- (cell_descent_historical_mean[[node]][kpi] * (time - 1) +
-                                                          residual) / time
-          cell_descent_historical_sd[[node]][kpi] <- sqrt((((time - 1) * (cell_descent_historical_sd[[node]][kpi] ^2) ) 
-                                                           + (residual - last_descent_mean) * (residual - cell_descent_historical_mean[[node]][kpi])) / time)
-          
-          
-          last_distance_mean <- cell_distance_historical_mean[[node]][kpi]
-          
-          cell_distance_historical_mean[[node]][kpi] <- (cell_distance_historical_mean[[node]][kpi] * (time - 1) +
-                                                          dist) / time
-          cell_distance_historical_sd[[node]][kpi] <- sqrt((((time - 1) * (cell_distance_historical_sd[[node]][kpi] ^2) ) 
-                                                           + (dist - last_distance_mean) * (dist - cell_distance_historical_mean[[node]][kpi])) / time)
-          
-          if(is.nan(cell_descent_historical_sd[[node]][kpi])) {
-            cell_descent_historical_sd[[node]][kpi] <- 0
-          }
-          if(is.nan(cell_distance_historical_sd[[node]][kpi])) {
-            cell_distance_historical_sd[[node]][kpi] <- 0
+          if(skipTraining == FALSE) {
+            
+            last_descent_mean <- cell_descent_historical_mean[[node]][kpi]
+            
+            cell_descent_historical_mean[[node]][kpi] <- (cell_descent_historical_mean[[node]][kpi] * (time - 1) +
+                                                            residual) / time
+            cell_descent_historical_sd[[node]][kpi] <- sqrt((((time - 1) * (cell_descent_historical_sd[[node]][kpi] ^2) ) 
+                                                             + (residual - last_descent_mean) * (residual - cell_descent_historical_mean[[node]][kpi])) / time)
+            if(is.nan(cell_descent_historical_sd[[node]][kpi])) {
+              cell_descent_historical_sd[[node]][kpi] <- 0
+            }
+            
           }
           
+          if(selectMethod[3] == TRUE) {
+            
+            trend_fit[kpi] <- featureTrendThresholdPVal(curr_season_std,
+                                                        prev_season_std,
+                                                        curr_val_std,
+                                                        prev_val_std,
+                                                        cell_descent_historical_sd[[node]][kpi],
+                                                        threshold_confidence, visual)
+            
+          }
           
-#           if(selectMethod[3] == TRUE) {
-#             
-#             trend_fit[kpi] <- featureTrendThresholdPVal(curr_season_std,
-#                                                         prev_season_std,
-#                                                         curr_val_std,
-#                                                         prev_val_std,
-#                                                         descent_threshold,
-#                                                         threshold_confidence, visual)
-#             
-#           }
         }
         if(time >= startMemoryCheck) {
           
@@ -288,22 +366,21 @@ STCOD_Cluster2 <- function(cellData, coordinates, period = 24, watch_node = 5, n
                                                               threshold_confidence, visual)
           }
           
-          if(selectMethod[3] == TRUE) {
-            
-            trend_fit[kpi] <- featureTrendThresholdPVal(curr_season_std,
-                                                        prev_season_std,
-                                                        curr_val_std,
-                                                        prev_val_std,
-                                                        cell_descent_historical_sd[[node]][kpi],
-                                                        threshold_confidence, visual)
-            
-          }
+          
           
           if(selectMethod[5] == TRUE) {
-            
-            history_fit[kpi] <- featureHistoryFitness(cell_historical_mean[[node]][kpi],
-                                                      cell_historical_sd[[node]][kpi],
-                                                      curr_values[kpi], visual)
+            if(festivity) {
+              history_fit[kpi] <- featureHistoryFitness(cell_F_historical_mean[[node]][kpi],
+                                                        cell_F_historical_sd[[node]][kpi],
+                                                        curr_values[kpi], visual)
+              
+            }
+            else {
+              history_fit[kpi] <- featureHistoryFitness(cell_historical_mean[[node]][kpi],
+                                                        cell_historical_sd[[node]][kpi],
+                                                        curr_values[kpi], visual)
+              
+            }
           }
           
         }
@@ -319,14 +396,10 @@ STCOD_Cluster2 <- function(cellData, coordinates, period = 24, watch_node = 5, n
                                                    + (curr_values[kpi] - last_mean) * (curr_values[kpi] - cell_historical_mean[[node]][kpi])) / time)
           
           
- 
-          
-          
         }
         
         
       }
-      
       
       
       
@@ -337,8 +410,12 @@ STCOD_Cluster2 <- function(cellData, coordinates, period = 24, watch_node = 5, n
         prev_state[[node]][1,] <- shiftRight(prev_state[[node]][1,] , 1)
         prev_state[[node]][1,1] <- "OK"
         
-        cell_seasonality[[node]] <- updateSeasonality(cell_seasonality[[node]], curr_values, curr_period,
-                                                      curr_status = prev_state[[node]][1,1], noSeasonPresent = TRUE)
+        if(skipTraining == FALSE) {
+          
+          cell_seasonality[[node]] <- updateSeasonality(cell_seasonality[[node]], curr_values, curr_period,
+                                                        curr_status = prev_state[[node]][1,1], noSeasonPresent = TRUE)
+          
+        }
         
         
         node_priority[[node]][1] <- 0
@@ -369,7 +446,7 @@ STCOD_Cluster2 <- function(cellData, coordinates, period = 24, watch_node = 5, n
               kpiPVals <- c(kpiPVals,
                             distance_fit[kpi])
             }            
-            if(selectMethod[3] == TRUE && time >= startHistoryCheck) {
+            if(selectMethod[3] == TRUE && time >= startTrendCheck) {
               
               kpiPVals <- c(kpiPVals,
                             trend_fit[kpi])
@@ -405,12 +482,12 @@ STCOD_Cluster2 <- function(cellData, coordinates, period = 24, watch_node = 5, n
             multivariateMethodPriority <- c(multivariateMethodPriority,
                                             fisherCombinedPriority(distance_fit))
           }
-          if(time >=startHistoryCheck) {
-          if(selectMethod[3] == TRUE) {
-            multivariateMethodPriority <- c(multivariateMethodPriority,
-                                            fisherCombinedPriority(trend_fit))
-            
-          }
+          if(time >=startTrendCheck) {
+            if(selectMethod[3] == TRUE) {
+              multivariateMethodPriority <- c(multivariateMethodPriority,
+                                              fisherCombinedPriority(trend_fit))
+              
+            }
           }
         }
         if(time >= startMemoryCheck) {
@@ -425,7 +502,7 @@ STCOD_Cluster2 <- function(cellData, coordinates, period = 24, watch_node = 5, n
                                             fisherCombinedPriority(history_fit))
           }
         }
-
+        
         if(time >= 73 && is.nan(multivariateMethodPriority)) {
           print("debug")
         }
@@ -468,8 +545,10 @@ STCOD_Cluster2 <- function(cellData, coordinates, period = 24, watch_node = 5, n
         }
         
         #update seasonality
-        cell_seasonality[[node]] <- updateSeasonality(cell_seasonality[[node]], curr_values, curr_period,
-                                                      curr_status = prev_state[[node]][1,1])
+        if(skipTraining == FALSE) {
+          cell_seasonality[[node]] <- updateSeasonality(cell_seasonality[[node]], curr_values, curr_period,
+                                                        curr_status = prev_state[[node]][1,1])
+        }
       }      
       
       #remember values
@@ -514,6 +593,7 @@ STCOD_Cluster2 <- function(cellData, coordinates, period = 24, watch_node = 5, n
     
     #START CLUSTER OPERATION
     
+    
     for(node in (1:node_number)) {
       
       curr_period <- ((time-1) %% period) + 1
@@ -521,14 +601,14 @@ STCOD_Cluster2 <- function(cellData, coordinates, period = 24, watch_node = 5, n
       
       #VOTING PROCEDURE
       
-      if(time >= min(startSeasonCheck, startMemoryCheck, startHistoryCheck)) {
+      if(time >= max(min(startSeasonCheck, startMemoryCheck, startHistoryCheck), 1 + startTrendCheck + ncol(prev_priority[[node]]))) {
         
         
         cluster_op <- fastGeneralWeightedFisherScan(node_priority[[node]], neigh_weight[[node]], anomaly_significance)
         
         if (cluster_op$vote > anomaly_significance) {
           
-          #print(paste("Anomaly cluster at time ",time))
+          #print(paste("Node: ",node,", anomaly cluster at time ",time))
           
           
           inv_neighs <- cluster_op$nodes
@@ -539,16 +619,25 @@ STCOD_Cluster2 <- function(cellData, coordinates, period = 24, watch_node = 5, n
             
           }
           
+          #Qui c'era il passaggio di node_votes
+          
           node_votes[inv_nodes] <- node_votes[inv_nodes] + 1
           
           string <- paste(inv_nodes, collapse = " ")
-          #print(paste("Involved nodes: ", string))
+          print(paste("(",node,",",time,")Involved nodes: ", string,", vote ",cluster_op$vote))
           
+          new_ac <- anomaly_cluster.merge(anomaly_clusters[[time]], inv_nodes, cluster_op$vote)
+          
+          if(!is.null(new_ac)) {
+            anomaly_clusters[[time]] <- new_ac
+          }
           
           #only record anomaly if includes this node
           if(node %in% inv_nodes) {
             
+            
             anomaly_times[[node]] <- c(anomaly_times[[node]], time)
+            
           }
           
         }
@@ -558,7 +647,7 @@ STCOD_Cluster2 <- function(cellData, coordinates, period = 24, watch_node = 5, n
       
       #SIMILARITY CHECK - WEIGHT UPDATING
       
-      if(time >= min(startSeasonCheck, startMemoryCheck, startHistoryCheck)) {
+      if(time >= startTrendCheck + ncol(prev_priority[[node]])) {
         similarity_update_rate <- 0.2
         
         for(neigh_ind in (2:neigh_number)) {
@@ -614,8 +703,8 @@ STCOD_Cluster2 <- function(cellData, coordinates, period = 24, watch_node = 5, n
         #                                       min_k = bestK, max_k = bestK)
         
         
-       # new_chains <- anomaly_motifs(cellData[[1]][neigh_index[[node]], 1:time], 
-      #                               anomaly_times[[node]], min_k = bestK, max_k = bestK)
+        # new_chains <- anomaly_motifs(cellData[[1]][neigh_index[[node]], 1:time], 
+        #                               anomaly_times[[node]], min_k = bestK, max_k = bestK)
         new_chains <- anomaly_motifs(priority_history[neigh_index[[node]], 1:time], 
                                      anomaly_times[[node]], min_k = bestK, max_k = bestK)
         
@@ -634,8 +723,8 @@ STCOD_Cluster2 <- function(cellData, coordinates, period = 24, watch_node = 5, n
       }
       else if(motif_discovery == T && time >= anomaly_testing_time && !is.null(anomaly_motifs[[node]])) {
         #Search through the discovered motifs
-#        forecasts <- motif_search(as.matrix(cellData[[1]][neigh_index[[node]], time]), bestLevels[[node]],
-#                                  anomaly_motifs[[node]], bestK)
+        #        forecasts <- motif_search(as.matrix(cellData[[1]][neigh_index[[node]], time]), bestLevels[[node]],
+        #                                  anomaly_motifs[[node]], bestK)
         forecasts <- motif_search(as.matrix(node_priority[[node]]), bestLevels[[node]],
                                   anomaly_motifs[[node]], bestK)
         
@@ -657,24 +746,1147 @@ STCOD_Cluster2 <- function(cellData, coordinates, period = 24, watch_node = 5, n
     #END CLUSTER OPERATION
     
     #check votes
-    
-    if(any(node_votes > 3)) {
-#       
-#       library(fpc)
-#       pamcl <- pamk(node_votes[node_votes > 3], krange = (1:(length(node_votes[node_votes > 3]) - 1)))
-#       
-    print(which(node_votes > 3))
-
+    if(!is.null(anomaly_clusters[[time]])) {
+      removeX <- NULL
+      for(clustIndex in 1:length(anomaly_clusters[[time]])) {
+        clust <- anomaly_clusters[[time]][[clustIndex]]
+        inv_nodes <- clust$nodes
+        meaningful_nodes <- inv_nodes[which(node_votes[inv_nodes] > 2)]
+        
+        if(length(meaningful_nodes) <= 0) {
+          
+          removeX <- c(removeX, clustIndex)
+          
+        }
+        anomaly_clusters[[time]][[clustIndex]]$nodes <- meaningful_nodes
+      }
+      
+      for(remInd in rev(removeX)) {
+        
+        anomaly_clusters[[time]][[remInd]] <- NULL
+        
+      }
+      if(length(anomaly_clusters[[time]]) <= 0) {
+        anomaly_clusters[time] <- list(NULL)
+      }
+      
+      for(clust in anomaly_clusters[[time]]) {
+        string <- paste(clust$nodes, collapse = ", ")
+        print(paste("Cluster nodes: ",string,"; priority ",clust$priority))
+      }
     }
-
+    
+    #     if(any(node_votes > 3)) {
+    #       #       
+    #       #       library(fpc)
+    #       #       pamcl <- pamk(node_votes[node_votes > 3], krange = (1:(length(node_votes[node_votes > 3]) - 1)))
+    #       #       
+    #       print(which(node_votes > 3))
+    #       
+    #     }
+    
+    
     final_result <- cbind(final_result, node_votes)
     
   }
   
+  print("end")
+  
+  if(anomaly_window_collection == TRUE) {
+    for(node in 1:node_number) {
+      
+      anomaly_times <- which(final_result[node,] > 0)
+      
+      for(feature in 1:length(cellData)) {
+        found_anomalies <- anomaly_window_search(as.numeric(cellData[[feature]][node,]), anomaly_times, anomaly_window)
+        if(!is.null(found_anomalies)) {
+          anomaly_collection[[feature]][[node]] <- found_anomalies
+        }
+      }
+    }
+  }
+  
+  return(list(result = final_result,
+              anomalies = anomaly_collection,
+              clusters = anomaly_clusters))
+  
+}
+
+################# Util Functions ##################
+
+col.toDate <- function(col) {
+  
+  print(paste("Day ", floor((col - 1)/24) + 1, ", hour ",(col -1)%%24,":00", collapse = ""))
+  
+  
+  
+}
+
+subData <- function(dataset, fromDay, toDay, features = 1:length(dataset)) {
+  
+  sub <- NULL
+  cols <- NULL
+  for(i in 1:length(fromDay)) {
+    
+    cols <- c(cols, 2 + c(((fromDay[i] - 1)*24 + 1) : (toDay[i]*24)))
+  }
+  
+  for(featInd in features) {
+    
+    feat <- dataset[[featInd]]
+    
+    sub <- c(sub, list(as.matrix(feat[,cols])))
+    
+  }
+  
+  return(sub)
+  
+}
+
+subDays <- function(fromDay, toDay) {
+  
+  fres <- NULL
+  
+  for(i in 1:length(fromDay)) {
+    
+    
+    days <- c(fromDay[i]:toDay[i])
+    
+    res <- rep(F, length(days))
+    
+    #if 1 November, T
+    res[which(days == 1)] <- T
+    
+    #if saturday (2) or sunday (3)
+    res[which(days%%7 >= 2 &  days%%7 <= 3)] <- T
+    
+    fres <- c(fres, res)
+  }
+  
+  return(fres)
+  
+}
+
+fullTreatment <- function(table, clean = FALSE, aggregateCoord = TRUE) {
+  
+  source("preprocess.R")
+  
+  if(clean){
+    cleaned1 <- toClean1(table)
+  }
+  else {
+    cleaned1 <- table
+  }
+  
+  if(aggregateCoord) {
+    library(reshape)
+    print("Melting")
+    melted <- toMelt1(cleaned1)
+    print("Casting")
+    casted <- cleanToNumeric(cast(melted, x + y ~ variable, fun = mean, na.rm = T))
+    
+  }
+  else {
+    casted <- cleanToNumeric(cleaned1[2:nrow(cleaned1),3:ncol(cleaned1)])
+    colnames(casted) <- c("x", "y", as.character(cleaned1[1, 5:ncol(cleaned1)]))
+  }
+  
+  print("removing rows with invalid coordinates")
+  casted <- casted[-which(rowSums(is.na(casted[,1:2])) > 0),]
+  
+  print("removing nan")
+  mynatable <- removenan(casted)
+  print("imputing na")
+  mynatable[,3:ncol(mynatable)] <- halfNA(mynatable[,3:ncol(mynatable)])
+  mynatable <- removenan(mynatable)
+  
+  return(mynatable)
+  
+  
+  
+}
+
+removenan <- function(x) {
+  
+  #x <- sapply(x, function(y) as.numeric(y))
+  
+  outRow <- NULL
+  for(i in 1:nrow(x)) {
+    if(!any(!is.nan(x[i,3:ncol(x)]))) {
+      outRow <- c(outRow, i)
+    }
+    
+  }
+  #remove fully nan nodes
+  if(!is.null(outRow)) {
+    
+    x <- x[-outRow,]
+    
+    
+  }
+  return(x)
+}
+
+notMatch <- function(mat1, mat2) {
+  
+  for(i in 1:nrow(mat1)) {
+    
+    if(any(mat1[i,] != mat2[i,])) {
+      
+      return(i)
+      
+    }
+    
+  }
+  
+  return(0)
+  
+}
+
+toPrepared <- function(x, manage_NA = TRUE) {
+  
+  x2 <- sapply(x[2:nrow(x),3:ncol(x)], function(x) as.numeric(as.character(x)))
+  colnames(x2) <- c("x","y",as.character(x[1,5:ncol(x)]))
+  rownames(x2) <- paste(x[2:nrow(x),1], " - ",x[2:nrow(x), 2])
+  x2 <- as.matrix(x2)
+  
+  x2 <- removenan(x2)
+  
+  if(manage_NA) {
+    x2 <- halfNA(x2)
+  }
+  
+  x2 <- removenan(x2)
+  
+  return(x2)
+}
+
+topk <- function(results, k, byVotes = FALSE, visual = F, coord = NULL) {
+  
+  votes <- results$result
+  cluster_l <- results$clusters
+  
+  topkmeasure <- vector("numeric", length = k)
+  
+  topkelementsT <- vector("numeric", length = k)
+  topkelementsI <- vector("numeric", length = k)
+  
+  if(byVotes) {
+    #byvotes
+    for(time in 1:length(cluster_l)) {
+      for(clust_i in 1:length(cluster_l[[time]])) {
+        
+        
+        clust <- cluster_l[[time]][[clust_i]]
+        if(!is.null(clust)){
+          voting <- votes[clust$nodes, time]
+          mvote <- mean(voting)
+          
+          if(mvote > topkmeasure[1]) {
+            #better priority
+            topkmeasure[1] <- mvote
+            topkelementsT[1] <- time
+            topkelementsI[1] <- clust_i
+            
+            #reorder
+            sorted <- sort(topkmeasure, index.return = T)
+            topkelementsT <- topkelementsT[sorted$ix]
+            topkelementsI <- topkelementsI[sorted$ix]
+            topkmeasure <- sorted$x
+          }
+        } 
+      }
+    }
+  }
+  else {
+    #by cluster priority
+    for(time in 1:length(cluster_l)) {
+      for(clust_i in 1:length(cluster_l[[time]])) {
+        
+        clust <- cluster_l[[time]][[clust_i]]
+        if(!is.null(clust)){
+          if(clust$priority > topkmeasure[1]) {
+            #better priority
+            topkmeasure[1] <- clust$priority
+            topkelementsT[1] <- time
+            topkelementsI[1] <- clust_i
+            
+            #reorder
+            sorted <- sort(topkmeasure, index.return = T)
+            topkelementsT <- topkelementsT[sorted$ix]
+            topkelementsI <- topkelementsI[sorted$ix]
+            topkmeasure <- sorted$x
+          }
+        }
+      } 
+    }
+  }
+  
+  result <- NULL
+  for(i in 1:k) {
+    
+    result <- c(result, list(list(cluster = cluster_l[[topkelementsT[i]]][[topkelementsI[i]]],
+                                  measure = topkmeasure[i],
+                                  time = topkelementsT[i])))
+    
+    if(visual) {
+      myTimeImage(coord, votes[,topkelementsT[i]], min = 0, max = 40,
+                  title = paste(k-i+1,"out of ",k,", time ",topkelementsT[i]))
+      myTimeImage.add_cluster(coord, cluster_l[[topkelementsT[i]]][[topkelementsI[i]]],
+                              "green")
+      #     for(other in 1:length(cluster_l[[topkelementsT[i]]])) {
+      #       if(other != topkelementsI[i]) {
+      #         myTimeImage.add_cluster(coord, cluster_l[[topkelementsT[i]]][[other]],
+      #                                 "green")
+      #       }
+      #     }
+      
+    }
+  }
+  return(result)
+}
+
+
+
+halfNA <- function(x) {
+  
+  NA_ind <- which(is.na(x))
+  for(ind in NA_ind) {
+    row <- ind %% nrow(x)
+    if(row == 0) {
+      row <- nrow(x)
+    }
+    col <- ceiling(ind / nrow(x))
+    
+    valid <- which(!is.na(x[row,]))
+    
+    minBindex <- max(which(valid < col))
+    maxAindex <- min(which(valid > col))
+    
+    if(abs(maxAindex) != Inf && abs(minBindex) != Inf) {
+      #don't impute
+      
+      minBefore <- x[row, valid[max(which(valid < col))]]
+      maxAfter <- x[row, valid[min(which(valid > col))]]
+      
+      beforeDist <- abs(col - valid[max(which(valid < col))])
+      afterDist <- abs(col - valid[min(which(valid > col))])
+      
+      
+      x[row,col] <- minBefore + beforeDist * ((maxAfter - minBefore) / (beforeDist + afterDist))
+      
+    }
+    
+  }
+  return(x)
+  
+}
+
+
+halfNaN <- function(x) {
+  
+  NA_ind <- which(is.nan(x))
+  for(ind in NA_ind) {
+    row <- ind %% nrow(x)
+    if(row == 0) {
+      row <- nrow(x)
+    }
+    col <- ceiling(ind / nrow(x))
+    
+    valid <- which(!is.nan(x[row,]))
+    
+    minBindex <- max(which(valid < col))
+    maxAindex <- min(which(valid > col))
+    
+    if(abs(maxAindex) != Inf && abs(minBindex) != Inf) {
+      #don't impute
+      
+      minBefore <- x[row, valid[max(which(valid < col))]]
+      maxAfter <- x[row, valid[min(which(valid > col))]]
+      
+      beforeDist <- abs(col - valid[max(which(valid < col))])
+      afterDist <- abs(col - valid[min(which(valid > col))])
+      
+      
+      x[row,col] <- minBefore + beforeDist * ((maxAfter - minBefore) / (beforeDist + afterDist))
+      
+    }
+    
+  }
+  return(x)
+  
+}
+
+
+anomaly_cluster.search_connection <- function(cluster, new_anomaly) {
+  
+  if(length(intersect(cluster$nodes, new_anomaly)) > 0 ) {
+    
+    return(TRUE)
+    
+  }
+  else {
+    return(FALSE)
+  }
+  
+  
+}
+
+anomaly_cluster.merge <- function(anomaly_cluster, new_anomaly, new_priority) {
+  
+  merged <- FALSE
+  mergedWith <- NULL
+  
+  if(!(is.null(anomaly_cluster) || length(anomaly_cluster) < 1)) {
+    
+    for(clust in 1:length(anomaly_cluster)) {
+      
+      if(anomaly_cluster.search_connection(anomaly_cluster[[clust]], new_anomaly) == TRUE) {
+        
+        anomaly_cluster[[clust]]$nodes <- union(anomaly_cluster[[clust]]$nodes, 
+                                                new_anomaly)
+        
+        #SCORRETTO: ma per ora ok
+        anomaly_cluster[[clust]]$priority <- mean(anomaly_cluster[[clust]]$priority, 
+                                                  new_priority)
+        
+        merged <- TRUE
+        mergedWith <- c(mergedWith, clust)
+      }
+      
+    }
+  }
+  
+  if(merged == FALSE) {
+    #add to cluster
+    anomaly_cluster <- c(anomaly_cluster, list(list(nodes = new_anomaly,
+                                                    priority = new_priority)))
+    
+    
+    
+  }
+  else if(length(mergedWith) >= 2) {
+    
+    #merge together all merged cluster
+    fin_clust <- mergedWith[1]
+    for(mer_clust in mergedWith[2:length(mergedWith)]) {
+      
+      anomaly_cluster[[fin_clust]]$nodes <- union(anomaly_cluster[[fin_clust]]$nodes, 
+                                                  anomaly_cluster[[mer_clust]]$nodes)
+      
+      anomaly_cluster[[fin_clust]]$priority <- mean(anomaly_cluster[[fin_clust]]$priority, 
+                                                    anomaly_cluster[[mer_clust]]$priority)
+      
+    }
+    
+    anomaly_cluster <- anomaly_cluster[-mergedWith[2:length(mergedWith)]]
+    
+  }
+  
+  return(anomaly_cluster)
+  
+}
+
+visFest <- function(data, row = sample(1:nrow(data), 1), saturday = 1, hour = 0, period = 24,
+                    startCol = 3, endCol = ncol(data)) {
+  
+  hour <- hour %% period
+  svec <- seq(startCol + hour, endCol, period)
+  festive <- c(seq(saturday, length(svec), 7), seq(saturday + 1, length(svec), 7))
+  
+  plot(data[row, seq(startCol + hour, endCol, period)], type = "o", col = "blue", pch = 16,
+       main = paste("Daily value, hour ", hour))
+  points(festive, data[row, svec[festive]], col = "red", pch = 16)
+  
+  m <- mean(data[row, svec[festive]])
+  s <- sd(data[row,svec[festive]])
+  
+  abline(h = m, col = "red")
+  abline(h = m +s, col = "purple")
+  abline(h = m - s, col = "purple")
+  
+  m2 <- mean(data[row, svec[-festive]])
+  s2 <- sd(data[row, svec[-festive]])
+  
+  abline(h = m2, col = "blue")
+  abline(h = m2 + s2, col = "turquoise1")
+  abline(h = m2 - s2, col = "turquoise1")
+  
+}
+
+from_cdf <- function(number, cdf) {
+  
+  bef <- max(which(cdf$x <= number))
+  aft <- min(which(cdf$x >= number))
+  
+  p_dist <- cdf$Fhat[aft] - cdf$Fhat[bef]
+  x_dist <- cdf$x[aft] - cdf$x[bef]
+  
+  nearB <- (number - cdf$x[bef]) / x_dist
+  
+  p_val <- cdf$Fhat[bef] + p_dist * (nearB)
+  
+  
+  return(p_val)
+  
+}
+
+STCOD_Cluster2.training <- function(cellData, festive, coordinates, period = 24, neigh_number = 10,
+                                    methodAct = NULL, NA_strat = "local_mean") {
+  #for kernel cdf
+  library(sROC)
+  
+  state_mem <- 5
+  
+  confidence_threshold <- 0.997
+  
+  
+  memory_periods <- 3
+  history_periods <- 3
+  
+  min_difference <- 0.0001
+  
+  kpi_number <- length(cellData)
+  node_number <- nrow(cellData[[1]])
+  final_timeslot <- ncol(cellData[[1]])
+  
+
+  method_number = 5
+  selectMethod <- vector("logical", length = method_number)
+  
+  #ACTIVATE\DEACTIVATE METHOD
+  if(!is.null(methodAct)) {
+    selectMethod <- methodAct
+  }
+  else {
+    selectMethod <- rep(FALSE, method_number)
+  }
+  
+  
+  startSeasonCheck <- period + 1
+  startHistoryCheck <- (history_periods * period) + 1
+  startMemoryCheck <- (memory_periods * period) + 1
+  
+  #indicates when to stop training period for anomaly forecasting (motif discovery will be done the timeslot preceding this)
+  anomaly_testing_time <- (9 * period) + 1
+  
+  distance_threshold <- 1
+  descent_threshold <- 1
+  threshold_confidence <- 0.842
+  
+  #indicates quality of method
+  method_weight <- rep(list(matrix(1, nrow = method_number, ncol = kpi_number)), node_number)
+  
+  anomaly_significance <- 0.9545
+  max_priority <- 0.999999
+  
+  
+  
+  #following data is stored in list instead of matrix to simulate cell distributed behavior
+  #element in a list[[1]] represents knowledge of node 1
+  #this is redundant in this algorithm, as cluster_season_sample and prev_state should be the same
+  
+  #seasonality data
+  cell_seasonality <- rep(list(matrix(rep(0, kpi_number*period), 
+                                      nrow = kpi_number, ncol = period)), node_number)
+  cell_F_seasonality <- rep(list(matrix(rep(0, kpi_number*period), 
+                                        nrow = kpi_number, ncol = period)), node_number)
+  
+  cell_seasonality_sd <- rep(list(matrix(rep(0, kpi_number*period), 
+                                         nrow = kpi_number, ncol = period)), node_number)
+  cell_F_seasonality_sd <- rep(list(matrix(rep(0, kpi_number*period), 
+                                           nrow = kpi_number, ncol = period)), node_number)
+  
+  cell_STL_seasonality <- rep(list(matrix(rep(0, kpi_number*period), 
+                                          nrow = kpi_number, ncol = period)), node_number)
+  cell_F_STL_seasonality <- rep(list(matrix(rep(0, kpi_number*period), 
+                                            nrow = kpi_number, ncol = period)), node_number)
+  
+  
+  
+  #previous values
+  cell_memories <- rep(list(matrix(rep(0, kpi_number *(period*memory_periods)), 
+                                   nrow = kpi_number, 
+                                   ncol = (period * memory_periods))), node_number)
+  
+  #historical values
+  cell_historical_mean <- rep(list(vector("numeric", length = kpi_number)), node_number)
+  cell_historical_sd <- rep(list(vector("numeric", length = kpi_number)), node_number)
+  
+  cell_F_historical_mean <- rep(list(vector("numeric", length = kpi_number)), node_number)
+  cell_F_historical_sd <- rep(list(vector("numeric", length = kpi_number)), node_number)
+  
+  
+  cell_descent_historical_mean <- rep(list(vector("numeric", length = kpi_number)), node_number)
+  cell_descent_historical_sd <- rep(list(vector("numeric", length = kpi_number)), node_number)
+  
+  cell_distance_historical_mean <- rep(list(vector("numeric", length = kpi_number)), node_number)
+  cell_distance_historical_sd <- rep(list(vector("numeric", length = kpi_number)), node_number)
+  
+  cell_cdf <- rep(list(rep(list(NULL), kpi_number)), node_number)
+  
+  
+  #state memory of cell and neighbors
+  #prev_state[[node]][1] indicates current state (after phase 1), [2] indicates state in previous time etc...
+  prev_state <- rep(list(matrix(, nrow = neigh_number, ncol = state_mem)), node_number)
+  neigh_index <- rep(list(vector("numeric", length = neigh_number)), node_number)
+  
+  prev_neigh_value <- rep(list(matrix(, nrow = neigh_number, ncol = state_mem)), node_number)
+  prev_priority <- rep(list(matrix(, nrow = neigh_number, ncol = state_mem)), node_number)
+  neigh_weight <- rep(list(vector("numeric", length = neigh_number)), node_number)
+  
+  node_votes <- vector("numeric", length = node_number)
+  final_result <- NULL
+  
+  #priority in neighborhood
+  #node_priority[[node]][1] refers to same node
+  #node_priority[[node]][2:neigh_number] refers to neighbours of node
+  #righ now no order between neighbours is to be assumed
+  node_priority <- rep(list(vector("numeric", length = neigh_number)), node_number)
+  node_motifs <- rep(list(NULL), node_number)
+  anomaly_motifs <- rep(list(NULL), node_number)
+  anomaly_collection <- rep(list(NULL), node_number)
+  anomaly_times <- rep(list(NULL), node_number)
+  priority_history <- matrix(,nrow = node_number, ncol = (anomaly_testing_time - 1))
+  
+  #because this implementation is not distributed, to avoid computing n*k times a bestK clustering
+  #only the first node does, and then it's assumed valid for all
+  
+  bestK <- NULL
+  bestLevels <- rep(list(NULL), node_number)
+  
+  
+  ###################Algorithm start
+  
+  
+  
+  
+  #NA_STRATEGY
+  if(NA_strat == "zero") {
+    
+    #for simplicity test without na
+    for(feature in 1:length(cellData)) {
+      cellData[[feature]][is.na(cellData[[feature]])] <- 0
+    }
+  }
+  else if (NA_strat == "local_mean") {
+    for(feature in 1:length(cellData)) {
+      
+      cellData[[feature]] <- halfNA(cellData[[feature]])
+      cellData[[feature]] <- halfNaN(cellData[[feature]])        
+      #       outRow <- NULL
+      #       for(i in 1:nrow(cellData[[feature]])) {
+      #         if(!any(!is.nan(cellData[[feature]][i,3:ncol(cellData[[feature]])]))) {
+      #           outRow <- c(outRow, i)
+      #         }
+      #         
+      #       }
+      #       #remove fully nan nodes
+      #       if(!is.null(outRow)) {
+      #         
+      #         for(feat in 1:length(cellData)) {
+      #            cellData[[feat]] <- cellData[[feat]][-outRow,]
+      #           
+      #         }
+      #       }
+      
+      #       #what can't be regressed put to 0 - we probably don't care anyway
+      #       cellData[[feature]][is.na(cellData[[feature]])] <- 0
+    }    
+    
+  }
+  
+  #stop using data.frame
+  for(feature in 1:length(cellData)) {
+    cellData[[feature]] <- as.matrix(cellData[[feature]])
+  }
+  
+  #initialize neighbors
+  
+  for(node in (1:node_number)) {
+    
+    library(FNN)
+    #should use matrix of spatial coord, ordered by node number
+    #as a test, just use the index of the node    
+    if(is.null(coordinates)) {
+      coordinates <- cbind(c(1:node_number), c(1:node_number))
+    }
+    spnn <- get.knn(coordinates, neigh_number - 1, "kd_tree")
+    nn.index <- spnn[[1]]
+    
+    neigh_index[[node]] <- c(node, nn.index[node,])
+    
+    #For starter, initialize neigh_weight to 1
+    neigh_weight[[node]] <- rep(1, length(neigh_weight[[node]]))
+    
+    
+  }
+  
+  
+  
+  #calculate mean and sd for every node
+  
+  for(node in (1:node_number)) {
+    for(kpi in (1:kpi_number)) {
+      
+      data <- cellData[[kpi]][node, ]
+      des_data <- cellData[[kpi]][node,]
+      #seasonality
+      for(hour in (0:(period-1))) {
+        svec <- seq(1 + hour, length(data), period)
+        festive_ind <- which(festive == T)
+        
+        cell_F_seasonality[[node]][kpi,hour + 1] <- mean(data[svec[festive_ind]], na.rm = T)
+        cell_F_seasonality_sd[[node]][kpi,hour + 1] <- sd(data[svec[festive_ind]], na.rm = T)
+        
+        cell_seasonality[[node]][kpi,hour + 1] <- mean(data[svec[-festive_ind]], na.rm = T)
+        cell_seasonality_sd[[node]][kpi,hour + 1] <- sd(data[svec[-festive_ind]], na.rm = T)
+        
+        des_data[svec[-festive_ind]] <- des_data[svec[-festive_ind]] - cell_seasonality[[node]][kpi,hour + 1] 
+        des_data[svec[festive_ind]] <- des_data[svec[festive_ind]] - cell_F_seasonality[[node]][kpi,hour + 1] 
+      }
+      
+      
+      
+      #historical
+      festive_start <- (which(festive) - 1)*period
+      
+      for(start in festive_start) {
+        festive_ind <- c(festive_ind, (1:period) + festive_start)
+      }
+      
+      cell_F_historical_mean[[node]][kpi] <- mean(data[festive_ind], na.rm = T)
+      cell_F_historical_sd[[node]][kpi] <- sd(data[festive_ind], na.rm = T)
+      cell_historical_mean[[node]][kpi] <- mean(data[-festive_ind], na.rm = T)
+      cell_historical_sd[[node]][kpi] <- sd(data[-festive_ind], na.rm = T)
+      
+      times <- ts(data[-festive_ind], frequency = period)
+      Ftimes <- ts(data[festive_ind], frequency = period)
+      
+      cell_cdf[[node]][[kpi]] <- kCDF(des_data)
+      
+      
+      #       season <- stl(times, s.window = "periodic")
+      #       Fseason <- stl(Ftimes, s.window = "periodic")
+      #       
+      #       cell_full_season <- season$time.series[1:24]
+      #       cell_F_full_season <- Fseason$time.series[1:24]
+      #       
+      #       cell_STL_seasonality[[node]][kpi, ] <- (cell_full_season + mean(season$time.series[,"trend"]))
+      #       cell_F_STL_seasonality[[node]][kpi, ] <- (cell_F_full_season + mean(Fseason$time.series[,"trend"]))
+    }
+    
+    
+  }
+  
+  
+  for(feature in 1:length(cellData)) {
+    
+    #what can't be regressed put to 0 - we probably don't care anyway
+    cellData[[feature]][is.na(cellData[[feature]])] <- 0
+    cellData[[feature]][is.nan(cellData[[feature]])] <- 0
+    
+  }  
+  
+  
+  
+  for(time in (1:final_timeslot)) {
+    
+    print(paste("Time: ", time))
+    
+    node_votes <- rep(0, node_number)
+    
+    
+    ## START NODE OPERATION ##
+    
+    
+    for(node in (1:node_number)) {
+      
+      #check time slot
+      
+      curr_period <- ((time-1) %% period) + 1
+      
+      #check if festive
+      curr_day <- floor((time-1)/period) + 1
+      festivity <- festive[curr_day]
+      
+      
+      curr_values <- vector("numeric", length = kpi_number)
+      
+      
+      if(selectMethod[1] == TRUE) {
+        season_fit <- vector("numeric", length = kpi_number)
+      }
+      if(selectMethod[2] == TRUE) {
+        distance_fit <- vector("numeric", length = kpi_number)
+        
+      }
+      if(selectMethod[3] == TRUE) {
+        trend_fit <- vector("numeric", length = kpi_number)
+        
+      }
+      if(selectMethod[4] == TRUE) {
+        previous_fit <- vector("numeric", length = kpi_number)
+        
+      }
+      if(selectMethod[5] == TRUE) {
+        history_fit <- vector("numeric", length = kpi_number)
+      }
+      
+      
+      
+      #for each feature in the node, calculate measures
+      for(kpi in (1:kpi_number)) {
+        
+        curr_values[kpi] <- cellData[[kpi]][node, time]
+        
+        if(festivity) {
+          curr_seasonality <- cell_F_seasonality[[node]][kpi,]
+          curr_seasonality_sd <- cell_F_seasonality_sd[[node]][kpi,]
+        }
+        else {
+          curr_seasonality <- cell_seasonality[[node]][kpi,]
+          curr_seasonality_sd <- cell_seasonality_sd[[node]][kpi,]
+        }
+        
+        
+        
+        
+        if(selectMethod[1] == TRUE) {
+          season_fit[kpi] <- featureSeasonFitness(curr_seasonality,
+                                                  curr_values[kpi],
+                                                  curr_period, replicas = 3)
+        }
+        
+        #find standardized values for distance and trend
+        season_avg <- mean(curr_seasonality)
+        season_rng <- (range(curr_seasonality)[2] 
+                       - range(curr_seasonality)[1]) / 2
+        
+        if(is.nan(season_rng) || is.null(season_rng)) {
+          print("debug")
+        }
+        
+        if(season_rng < min_difference ) {
+          season_rng <- min_difference
+        }
+        
+        curr_val_std <- (curr_values[kpi] - season_avg) / season_rng 
+        curr_season_std <- (curr_seasonality[curr_period] - season_avg) / season_rng 
+        
+        dist <- curr_val_std - curr_season_std
+        #dist <- curr_values[kpi] - curr_seasonality[curr_period]
+        
+        if(curr_period > 1) {
+          last_period <- curr_period - 1 
+        }
+        else {
+          last_period <- period
+        }
+        
+        if(time >= 2) {
+          
+          prev_val_std <- (cellData[[kpi]][node,time-1] - season_avg) / season_rng 
+          prev_season_std <- (curr_seasonality[last_period] - season_avg) / season_rng 
+          
+          residual <- (curr_val_std - prev_val_std) - (curr_season_std - prev_season_std)
+          #residual <- curr_values[kpi] - cellData[[kpi]][node,time-1] -(curr_seasonality[curr_period] - curr_seasonality[last_period])
+          
+          last_descent_mean <- cell_descent_historical_mean[[node]][kpi]
+          
+          cell_descent_historical_mean[[node]][kpi] <- (cell_descent_historical_mean[[node]][kpi] * (time - 1) +
+                                                          residual) / time
+          cell_descent_historical_sd[[node]][kpi] <- sqrt((((time - 1) * (cell_descent_historical_sd[[node]][kpi] ^2) ) 
+                                                           + (residual - last_descent_mean) * (residual - cell_descent_historical_mean[[node]][kpi])) / time)
+          
+          if(is.nan(cell_descent_historical_sd[[node]][kpi])) {
+            cell_descent_historical_sd[[node]][kpi] <- 0
+          }
+        }
+        
+        last_distance_mean <- cell_distance_historical_mean[[node]][kpi]
+        
+        cell_distance_historical_mean[[node]][kpi] <- (cell_distance_historical_mean[[node]][kpi] * (time - 1) +
+                                                         dist) / time
+        cell_distance_historical_sd[[node]][kpi] <- sqrt((((time - 1) * (cell_distance_historical_sd[[node]][kpi] ^2) ) 
+                                                          + (dist - last_distance_mean) * (dist - cell_distance_historical_mean[[node]][kpi])) / time)
+        
+        
+        if(is.nan(cell_distance_historical_sd[[node]][kpi])) {
+          cell_distance_historical_sd[[node]][kpi] <- 0
+        }
+        
+        if(selectMethod[4] == TRUE) {
+          previous_fit[kpi] <- featureLastValuesFitness(cell_memories[[node]][kpi,],
+                                                        curr_values[kpi], visual)          
+        }
+        
+        if(cell_historical_sd[[node]][kpi] < min_difference) {
+          cell_historical_sd[[node]][kpi] <- min_difference
+        }
+        
+        if(selectMethod[2] == TRUE) {
+          distance_fit[kpi] <- featureDistanceThresholdPVal(curr_season_std,
+                                                            curr_val_std,
+                                                            cell_distance_historical_sd[[node]][kpi],
+                                                            threshold_confidence, visual)
+        }
+        
+        if(selectMethod[3] == TRUE) {
+          
+          trend_fit[kpi] <- featureTrendThresholdPVal(curr_season_std,
+                                                      prev_season_std,
+                                                      curr_val_std,
+                                                      prev_val_std,
+                                                      cell_descent_historical_sd[[node]][kpi],
+                                                      threshold_confidence, visual)
+          
+        }
+        
+        if(selectMethod[5] == TRUE) {
+          
+          history_fit[kpi] <- featureHistoryFitness(cell_historical_mean[[node]][kpi],
+                                                    cell_historical_sd[[node]][kpi],
+                                                    curr_values[kpi], visual)
+        }
+        
+      }
+      
+    }
+    
+    ## END NODE OPERATION ##
+    
+  }
+  
+  
   
   print("end")
   
-return(final_result)
+  tr_result <- list(seasonality = cell_seasonality,
+                    F_seasonality = cell_F_seasonality,
+                    season_sd = cell_seasonality_sd,
+                    F_season_sd = cell_F_seasonality_sd,
+                    hist_mean = cell_historical_mean,
+                    hist_sd = cell_historical_sd,
+                    F_hist_mean = cell_F_historical_mean,
+                    F_hist_sd = cell_F_historical_sd,
+                    descent_mean = cell_descent_historical_mean,
+                    descent_sd = cell_descent_historical_sd,
+                    distance_mean = cell_distance_historical_mean,
+                    distance_sd = cell_distance_historical_sd,
+                    kernel_cdf = cell_cdf)
+  
+  return(tr_result)
+  
+}
+
+anomaly_cluster.distance <- function(anomaly_collection) {
+  
+  library(dtw)
+  
+  #find out max and min length of anomaly
+  min_length <- Inf
+  max_length <- 0
+  
+  for(node_list in anomaly_collection) {
+    for(anomaly in node_list) {
+      
+      min_length <- min(min_length, length(anomaly))
+      max_length <- max(max_length, length(anomaly))
+      
+    }
+  }
+  
+  anomalies_by_length <- rep(list(NULL), (max_length - min_length + 1))
+  
+  
+  for(node_list in anomaly_collection) {
+    for(anomaly in node_list) {
+      
+      alloc <- length(anomaly) - min_length + 1
+      
+      anomalies_by_length[[alloc]] <- rbind(anomalies_by_length[[alloc]],
+                                            anomaly)
+      
+    }
+  }
+  
+  #if number of anomalies is very high, randomly sample 100 out of them, and calc distances
+  
+  distance_matrices <- NULL
+  max_rows <- 100
+  
+  for(i in (1:length(anomalies_by_length))) {
+    
+    if(!is.null(anomalies_by_length[[i]])) {
+      
+      if(nrow(anomalies_by_length[[i]]) > max_rows) {
+        
+        anomalies_by_length[[i]] <- anomalies_by_length[[i]][sample(nrow(anomalies_by_length[[i]]), max_rows),]
+        
+      }
+      
+      distance_matrices <- c(distance_matrices, list(dist(anomalies_by_length[[i]], method = "DTW")))
+    }
+    else {
+      distance_matrices <- c(distance_matrices, list(NULL))
+    }
+  }  
+  
+  return(list(distances = distance_matrices,
+              samples = anomalies_by_length))
+  
+}
+
+anomaly_cluster.clustering <- function(distance_results, k) {
+  
+  distances <- distance_results$distances
+  samples <- distance_results$samples
+  
+  clust <- NULL
+  
+  for(i in (1:length(distances))) {
+    if(!is.null(distances[[i]]) && nrow(samples[[i]]) > k) {
+      
+      clust <- c(clust, list(kmeans(distances[[i]], centers = k)))
+      
+    } 
+    else {
+      clust <- c(clust, list(samples[[i]]))
+    }
+  }
+  
+  return(clust)
+}
+
+anomaly_cluster.bestClustering <- function(distance_results) {
+  
+  test <- NULL
+  
+  distances <- distance_results$distances
+  samples <- distance_results$samples
+  
+  clust <- NULL
+  
+  for(i in (1:length(distances))) {
+    
+    maxK <- min(30, nrow(samples[[i]]) - 1)
+    
+    if(!is.null(distances[[i]]) && length(distances[[i]]) > 1) {
+      best_clust <- NULL
+      for(k in 1:maxK) {
+        tent_clust <- kmeans(distances[[i]], centers = k)
+        test <- c(test, abs(mean(tent_clust$tot.withinss / tent_clust$betweenss)))
+                    
+        if(is.null(best_clust)){
+          best_clust <- tent_clust
+        }
+        else if(abs(mean(tent_clust$tot.withinss / tent_clust$betweenss)) < abs(mean(best_clust$tot.withinss / best_clust$betweenss))) {
+                
+          best_clust <- tent_clust
+        }
+      
+      }
+      
+      clust <- c(clust, list(best_clust))
+      
+    }
+      else {
+        clust <- c(clust, list(samples[[i]]))
+      }
+  
+  }
+  
+  plot(2:length(test), test[-1], type = "o")
+  
+  return(clust)
+}
+
+anomaly_cluster.show <- function(clust, samples, clk = NULL, numb = NULL) {
+  
+  if(is.null(numb)) {
+    #number of width to be considered
+    numb <- 1:length(clust)
+  }
+  if(is.null(clk)) {
+    #number of cluster types to consider
+    clk <- 1:length(unique(clust[[1]]$cluster))
+    
+  }
+  
+  
+  plotRows <- length(clk)
+  plotCols <- length(numb)
+  
+  
+  old.par <- par(mfrow = c(plotRows,plotCols), mai = c(0.6,1,0.5,0.5))
+  
+  for(i in numb) {
+    for(j in clk) {
+      
+      indices <- which(clust[[i]]$cluster == j)
+      samp <- samples[[i]][indices,]
+      main <- paste("Anomaly type ",j, ", length ",i)
+      
+      if(length(indices) == 1) {
+        plot(samp, type = "l", main = main)
+      }
+      else {
+        plot(colMeans(samp), type = "l", main = main)
+      }
+    }
+  }
+  
+  par(old.par)
+}
+
+anomaly_window_search <- function(data, anomaly_times, min_window) {
+  
+  #find anomaly sets
+  
+  current_motif <- NULL
+  motif_set <- NULL
+  
+  for(cand in (anomaly_times)) {
+    
+    #find motif representing found anomaly
+    current_motif <- c(current_motif, data[cand])
+    
+    if( !((cand + 1) %in% anomaly_times)) {
+      #stored all anomalous moments
+      
+      before <- 0
+      after <- 0
+      noMore <- F
+      init_length <- length(current_motif)
+      
+      while(length(current_motif) < min_window && noMore == FALSE) {
+        #pad data
+        
+        if(before <= after && (cand - init_length - before) >= 1 ) {
+          current_motif <- c(data[cand - init_length - before], current_motif)
+          before <- before + 1
+        }
+        else if(cand + after + 1 <= length(data))   {
+          current_motif <- c(current_motif, data[cand + after + 1])
+          after <- after + 1
+        }
+        else if((cand - init_length - before) >= 1 ) {
+          current_motif <- c(data[cand - init_length - before], current_motif)
+          before <- before + 1
+        }
+        else {
+          noMore <- TRUE
+        }
+      }
+      
+      motif_set <- c(motif_set, list(current_motif))
+      current_motif <- NULL
+      
+    }
+  }
+  
+  return(motif_set)
   
 }
 
@@ -1019,170 +2231,6 @@ similarity_check <- function(prev_priority_own, prev_priority_neigh) {
 }
 
 
-#node: index of node
-#curr_values: vector of n values, one for each kpi
-#prev_values: the curr_values of time - 1
-#cell_seasonality: list of n vectors (one for each kpi) of expected values for that period
-#time: current time slot
-#period: width of time period
-
-#returns: a list with a p-value for the node and each of the individual features
-
-oldNodeDetection <- function(node, curr_values, prev_values, cell_seasonality, time, period = 24) {
-  
-  
-  #check time slot
-  curr_period <- ((time - 1) %% period) + 1
-  
-  #read current and previous value (should be stored)
-  curr_value <- cellData[node, time]
-  if(time > 1) {
-    prev_value <- cellData[node,time - 1]
-  }
-  else {
-    prev_value <- 0
-  }
-  
-  #get cell seasonality
-  curr_value_season <- cell_seasonality[[node]][curr_period]
-  if(curr_period == 1) {
-    prev_value_season <- cell_seasonality[[node]][period]
-    prev_season_diff <- cell_season_diff[[node]][period]
-    prev_season_lon_diff <- cell_season_lon_diff[[node]][period]
-    prev_residual <- cell_residual[[node]][period]
-  }
-  else {
-    prev_value_season <- cell_seasonality[[node]][curr_period - 1]
-    prev_season_diff <- cell_season_diff[[node]][curr_period - 1]
-    prev_season_lon_diff <- cell_season_lon_diff[[node]][curr_period - 1]
-    prev_residual <- cell_residual[[node]][curr_period - 1]
-  }
-  
-  season_avg <- mean(cell_seasonality[[node]], na.rm = T)
-  season_rng <- (range(cell_seasonality[[node]])[2] - 
-                   range(cell_seasonality[[node]])[1])
-  
-  #if no season value exists, skip any check, consider node OK (learning phase)
-  if(time < period + 1) {
-    
-    
-    #update current state, shift previous for this node in its list
-    prev_state[[node]][node,] <- shiftRight(prev_state[[node]][node,] , 1)
-    prev_state[[node]][node,1] <- "OK"
-    
-    #initialize cell seasonality as same as the first period of values
-    cell_seasonality[[node]][curr_period] <- cellData[node,time]
-  }
-  #else check seasonality (wrt cell past seasons)
-  else {
-    
-    if((time > period * memory_periods) && node == watch_node) {
-      
-      print(fitnessCheck(cell_memories[[node]], curr_value, c(95,68), plot = TRUE))
-      
-    }
-    
-    
-    if(is.na(prev_season_diff)){
-      prev_season_diff <- 0
-    }
-    
-    #standardize comparison values from -1 to +1
-    
-    if(season_rng != 0) {
-      curr_value_std <- ((curr_value - season_avg)/(season_rng/2))
-      prev_value_std <- ((prev_value - season_avg)/(season_rng/2))
-      curr_value_season_std <- ((curr_value_season - season_avg)/(season_rng/2))
-      prev_value_season_std <- ((prev_value_season - season_avg)/(season_rng/2))
-    }
-    else {
-      curr_value_season_std <- ((curr_value_season - season_avg))
-      prev_value_season_std <- ((prev_value_season - season_avg))
-      curr_value_std <- ((curr_value - season_avg))
-      prev_value_std <- ((prev_value - season_avg))
-    }
-    
-    immediate_residual <- curr_value_std - prev_value_std
-    #immediate_residual <- curr_value - prev_value
-    season_residual <- curr_value_season_std - prev_value_season_std
-    #season_residual <- curr_value_season - prev_value_season
-    
-    
-    #residual in approximately range [-2,+2]
-    residual <- immediate_residual - season_residual
-    
-    
-    #stored for plotting
-    cell_residual[[node]][curr_period] <- residual
-    cell_val_std[[node]][curr_period] <- curr_value_std
-    
-    cell_acalc[[node]][curr_period] <- (abs(residual) + 1) ^ 2
-    
-    
-    shortCUSUM <- residual + (prev_season_diff * 0.6)
-    longCUSUM <- weighted.mean(c(prev_season_lon_diff, residual), c(0.6,1))
-    
-    
-    cell_season_diff[[node]][curr_period] <- shortCUSUM
-    cell_season_lon_diff[[node]][curr_period] <- (abs(shortCUSUM) + 1) ^ 2
-    
-    #if residual above threshold, OUT : cell changed behavior from past
-    if((abs(residual) + 1) ^ 2 > cell_threshold) {
-      
-      
-      #update current state, shift previous for this node in its list
-      prev_state[[node]][node,] <- shiftRight(prev_state[[node]][node,] , 1)
-      if(residual > 0)
-        prev_state[[node]][node,1] <- "OUT-up"
-      else
-        prev_state[[node]][node,1] <- "OUT-down"
-      
-      #update cell seasonality
-      cell_seasonality[[node]][curr_period] <- weighted.mean(
-        c(cell_seasonality[[node]][curr_period],cellData[node,time]),
-        c(1,cell_update_rate_OUT))
-      
-      
-    }
-    #else OK
-    else {
-      
-      if((abs(shortCUSUM) + 1) ^ 2 > diff_threshold) {
-        #difference is accumulating
-        #update current state, shift previous for this node in its list
-        prev_state[[node]][node,] <- shiftRight(prev_state[[node]][node,] , 1)
-        if(shortCUSUM > 0)
-          prev_state[[node]][node,1] <- "TREND-up"
-        else
-          prev_state[[node]][node,1] <- "TREND-down"
-        
-        #update cell seasonality
-        cell_seasonality[[node]][curr_period] <- weighted.mean(
-          c(cell_seasonality[[node]][curr_period],cellData[node,time]),
-          c(1,cell_update_rate_OUT))
-        
-      }
-      else{
-        #update current state, shift previous for this node in its list
-        prev_state[[node]][node,] <- shiftRight(prev_state[[node]][node,] , 1)
-        prev_state[[node]][node,1] <- "OK"
-        
-        #update cell seasonality
-        cell_seasonality[[node]][curr_period] <- weighted.mean(
-          c(cell_seasonality[[node]][curr_period],cellData[node,time]),
-          c(1,cell_update_rate_OK))
-      }          
-    }
-  }   
-  
-  #remember values
-  cell_memories[[node]] <- c(cell_memories[[node]][2:length(cell_memories[[node]])], curr_value)
-  #cell_memories[[node]] <- c(cell_memories[[node]][2:length(cell_memories[[node]])], cell_seasonality[[node]][curr_period])
-  
-  
-  
-}
-
 cellDataPlotter <- function(cellData, singleNode = TRUE) {
   
   kpi_number <- length(cellData)
@@ -1387,6 +2435,26 @@ priority_function <- function(pvector, alfa) {
   
 }
 
+fisher.show <- function(priorities) {
+  
+  changingp <- c(1000:0)/1000
+  res <- NULL
+  for(i in 1:length(changingp)) {
+    res <- c(res, fisherCombinedPriority(c(1 - priorities, changingp[i])))
+  }
+  sting <- paste(priorities, collapse = ", ")
+  string <- paste("Fisher curve, starting priorities", sting)
+  #plot(1 - changingp, 1 - changingp, type = "l", main = string)
+  plot(1 - changingp, res, col = "red", type = "l", main = string, ylim = c(0,1))
+  abline(h = fisherCombinedPriority(c(1 - priorities)), col = "blue")
+  
+  lineL <- 10
+  for(j in 1:length(priorities)) {
+  points((1:lineL)/1000, rep(priorities[j],lineL), col = "purple", type = "l")
+  }
+  
+}
+
 #input: the pvalues
 #Returns fisher combined test (higher = worse!) a priority
 fisherCombinedPriority <- function(pvector) {
@@ -1430,6 +2498,7 @@ priorityWeight <- function(priority, weight, base_priority) {
   return(1 - wpval)
   
 }
+
 
 #input: weights, and the pvalues
 #Returns fisher combined test (higher = worse!) a priority
@@ -1625,9 +2694,9 @@ featureSeasonFitness <- function(feat_cell_seasonality, feat_curr_value, curr_pe
   }
   zscore <- (feat_curr_value - fcasted) / sdev
   
-#  pval <- 2*pnorm(-abs(zscore))
+  #  pval <- 2*pnorm(-abs(zscore))
   pval <- pnorm(zscore)
-
+  
   # (1 - pval) = minimum prediction interval threshold for given value, value within 1-pval most probable
   # pval = value is predicted within the pval less probable outcom
   
@@ -1682,10 +2751,10 @@ featureLastValuesFitness <- function(feat_cell_past_values, feat_curr_value, vis
   
   zscore <- (feat_curr_value - fcasted) / sdev
   
-#  pval <- 2*pnorm(-abs(zscore))
+  #  pval <- 2*pnorm(-abs(zscore))
   pval <- pnorm(zscore)
-
-
+  
+  
   # (1 - pval) = minimum prediction interval threshold for given value, value within 1-pval most probable
   # pval = value is predicted within the pval less probable outcome
   
@@ -1715,10 +2784,10 @@ featureHistoryFitness <- function(feat_historical_period_mean, feat_historical_p
   #find z-score (number of standard deviation of distance from historical value)
   zscore <- (feat_curr_value - feat_historical_period_mean) / feat_historical_period_sd
   
-#  pval <- 2*pnorm(-abs(zscore))
+  #  pval <- 2*pnorm(-abs(zscore))
   pval <- pnorm(zscore)
-
-
+  
+  
   # (1 - pval) = minimum prediction interval threshold for given value, value within 1-pval most probable
   # pval = value is predicted within the pval less probable outcom
   
@@ -1767,27 +2836,27 @@ featureDistanceThresholdPVal <- function(feat_cell_season_val, feat_curr_value, 
   #given confidence of 95.45%, distance_treshold is 2 sd
   #given confidence of x, distance_treshold is zscore(1 - x) * sd?
   
-#  sDev <- distance_threshold / qnorm(1 - (1 - threshold_confidence)/2 )
+  #  sDev <- distance_threshold / qnorm(1 - (1 - threshold_confidence)/2 )
   sDev <- distance_threshold / qnorm(1 - (1 - threshold_confidence))
-
-if(sDev == 0) {
-  if(residual > 0) {
-    zscore <- 5
+  
+  if(sDev == 0) {
+    if(residual > 0) {
+      zscore <- 5
+    }
+    else if(residual == 0) {
+      zscore <- 0
+    }
+    else if(residual < 0) {
+      zscore <- -5
+    }
   }
-  else if(residual == 0) {
-    zscore <- 0
+  else{
+    zscore <- residual / sDev
   }
-  else if(residual < 0) {
-    zscore <- -5
-  }
-}
-else{
-  zscore <- residual / sDev
-}
-
-#  pval <- 2*pnorm(-abs(zscore))
+  
+  #  pval <- 2*pnorm(-abs(zscore))
   pval <- pnorm(zscore)
-
+  
   
   if(visual == TRUE) {
     
@@ -1813,6 +2882,76 @@ else{
   
 }
 
+featureDiffPVal <- function(season_window, measure_window,
+                            threshold, threshold_confidence, 
+                            lag, difference,
+                            visual = FALSE) {
+  
+  #threshold_confidence indicates it is expected that value falls
+  #within distance_threshold with that confidence
+  
+  season_residual <- measure_window - season_window
+  
+  myDiff <- diff(season_residual, lag = lag, difference)
+  residual <- myDiff[length(myDiff)]
+  
+  #given confidence of 95.45%, distance_treshold is 2 sd
+  #given confidence of x, distance_treshold is zscore(1 - x) * sd?
+  
+  # sDev <- descent_threshold / qnorm(1 - (1 - threshold_confidence)/2 )
+  sDev <- threshold / qnorm(threshold_confidence)  
+  
+  if(sDev == 0) {
+    if(residual > 0) {
+      zscore <- 5
+    }
+    else if(residual == 0) {
+      zscore <- 0
+    }
+    else if(residual < 0) {
+      zscore <- -5
+    }
+  }
+  else{
+    zscore <- residual / sDev
+  }
+  pval <- pnorm(zscore)
+  
+#   if(visual == TRUE) {
+#     
+#     old.par <- par(mfrow = c(2,1), mai = c(0.6,1,0.5,0.5))
+#     
+#     yminlim <- min(feat_cell_season_val, feat_prev_cell_season_val,
+#                    feat_curr_value, feat_prev_value) - 0.5
+#     ymaxlim <- max(feat_cell_season_val, feat_prev_cell_season_val,
+#                    feat_curr_value, feat_prev_value) + 0.5
+#     
+#     plot(1, type ="n", main = "Trends", xlim = c(-0.5, +1.5), ylim = c(yminlim, ymaxlim))
+#     points(c(0, 1), c(feat_prev_cell_season_val, feat_cell_season_val), col = "blue", pch = 21)
+#     lines(c(0, 1), c(feat_prev_cell_season_val, feat_cell_season_val), col = "blue")
+#     points(c(0, 1), c(feat_prev_value, feat_curr_value), col = "black", pch = 16)
+#     lines(c(0, 1), c(feat_prev_value, feat_curr_value), col = "black")
+#     
+#     plot(1, type ="n", main ="Threshold", xlim = c(-1, 1), ylim = c(-1, 1))
+#     abline(a = 0, b = (feat_cell_season_val - feat_prev_cell_season_val), col = "blue")
+#     abline(a = 0, b = (feat_curr_value - feat_prev_value), col = "black")
+#     abline(a = 0, b = (feat_cell_season_val - feat_prev_cell_season_val) + descent_threshold, col = "red")
+#     abline(a = 0, b = (feat_cell_season_val - feat_prev_cell_season_val) - descent_threshold, col = "red")   
+#     #further sd thresholds
+#     abline(a = 0, b = (feat_cell_season_val - feat_prev_cell_season_val) + 2 * descent_threshold, col = "purple")
+#     abline(a = 0, b = (feat_cell_season_val - feat_prev_cell_season_val) - 2 * descent_threshold, col = "purple")    
+#     
+#     
+#     par(old.par)
+#     
+#   }
+  
+  
+  return(pval)
+  
+  
+}
+
 featureTrendThresholdPVal <- function(feat_cell_season_val, feat_prev_cell_season_val,
                                       feat_curr_value, feat_prev_value, 
                                       descent_threshold, 
@@ -1830,9 +2969,9 @@ featureTrendThresholdPVal <- function(feat_cell_season_val, feat_prev_cell_seaso
   #given confidence of 95.45%, distance_treshold is 2 sd
   #given confidence of x, distance_treshold is zscore(1 - x) * sd?
   
-# sDev <- descent_threshold / qnorm(1 - (1 - threshold_confidence)/2 )
+  # sDev <- descent_threshold / qnorm(1 - (1 - threshold_confidence)/2 )
   sDev <- descent_threshold / qnorm(threshold_confidence)  
-
+  
   if(sDev == 0) {
     if(residual > 0) {
       zscore <- 5
@@ -3520,6 +4659,7 @@ testFSS <- function() {
 }
 
 
+
 createTestNodeList <- function(node_number, feat_number, period = 24, period_number = 8) {
   
   nodeList <- NULL
@@ -4439,7 +5579,7 @@ discoverDescentThreshold <- function(cellData, period = 24) {
   
   
   for(feature in cellData) {
-      
+    
     for(cell in (1:nrow(feature))) {
       
       timeseries <- feature[cell,]
@@ -4449,7 +5589,7 @@ discoverDescentThreshold <- function(cellData, period = 24) {
       
       season <- stl(timeseries, s.window = "periodic")
       
-        
+      
     }
     
   }
@@ -4464,12 +5604,12 @@ discoverDescentThreshold <- function(cellData, period = 24) {
 }
 
 myTimeImage <- function(coord, vals, min = NULL, max = NULL,title = NULL) {
-
+  
   if(is.null(min)){
-  min <- min(vals)
+    min <- min(vals)
   }
   if(is.null(max)) {
-  max <- max(vals)
+    max <- max(vals)
   }
   
   vals <- rowMeans(as.matrix(vals), na.rm = T)
@@ -4483,7 +5623,13 @@ myTimeImage <- function(coord, vals, min = NULL, max = NULL,title = NULL) {
   
 }
 
-slidingWindowsImage <- function(coord, vals, window, min = NULL, max = NULL, overlap = FALSE) {
+myTimeImage.add_cluster <- function(coord, cluster, color) {
+  
+  clust <- cluster$nodes
+  points(coord[clust, 1], coord[clust, 2], pch = 19, col = color)
+}
+
+slidingWindowsImage <- function(coord, vals, window, min = NULL, max = NULL, overlap = FALSE, save = NULL) {
   
   if(is.null(min)){
     min <- min(vals)
@@ -4500,21 +5646,33 @@ slidingWindowsImage <- function(coord, vals, window, min = NULL, max = NULL, ove
     return (NULL)
   }
   
+  
+  
   if(overlap == TRUE) {
-  for(i in (1: (timeslots - window + 1))) {
-    
-    myTimeImage(coord, valMat[,(i:(i + window - 1))], min, max, 
-                title = paste("Mapping values, hours ",i," to ",i+window-1))
-    
-  }
+    for(i in (1: (timeslots - window + 1))) {
+      if(!is.null(save)) {
+        jpeg(file = paste(save,"Image ",i,".jpg"))
+      }
+      myTimeImage(coord, valMat[,(i:(i + window - 1))], min, max, 
+                  title = paste("Mapping values, hours ",i," to ",i+window-1))
+      
+      
+      if(!is.null(save)) {
+        dev.off()
+      }
+    }
   }
   else {
     
     for(i in (0:(floor(timeslots / window) - 1)) ) {
-      
+      if(!is.null(save)) {
+        jpeg(file = paste(save,"Image ",i+1,".jpg"))
+      }
       myTimeImage(coord, valMat[,((i*window + 1):( (i + 1)*window))], min, max, 
                   title = paste("Mapping values, hours ",(i*window + 1)," to ",(i + 1)*window))
-      
+      if(!is.null(save)) {
+        dev.off()
+      }
     }
     
   }
@@ -4596,4 +5754,20 @@ myImagePlot <- function(x, ...){
   layout(1)
 }
 # ----- END plot function ----- #
+
+
+densityPlot <- function(data, period = NULL, start = 1) {
+  
+  if(is.null(period)) {
+    vec <- as.numeric(data)
+    
+  }
+  else {
+    vec <- as.numeric(data[seq(start, length(data), period)])
+    
+  }
+  
+  plot(density(vec, na.rm = T), main = paste("Periodicity ", period, " slot ",start))
+  
+}
 
