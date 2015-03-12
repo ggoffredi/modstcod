@@ -1,5 +1,5 @@
 
-#################################### Main Algorithm ##########################################
+######## Main Algorithm ##########################################
 
 #cellData: list of n kpi, each containing a matrix for all element
 #neigh_number: includes self in count of neighborhood
@@ -812,424 +812,12 @@ STCOD_Cluster2 <- function(cellData, trainingData = NULL, coordinates, period = 
   
 }
 
-################# Util Functions ##################
-
-col.toDate <- function(col) {
-  
-  print(paste("Day ", floor((col - 1)/24) + 1, ", hour ",(col -1)%%24,":00", collapse = ""))
-  
-  
-  
-}
-
-subData <- function(dataset, fromDay, toDay, features = 1:length(dataset)) {
-  
-  sub <- NULL
-  cols <- NULL
-  for(i in 1:length(fromDay)) {
-    
-    cols <- c(cols, 2 + c(((fromDay[i] - 1)*24 + 1) : (toDay[i]*24)))
-  }
-  
-  for(featInd in features) {
-    
-    feat <- dataset[[featInd]]
-    
-    sub <- c(sub, list(as.matrix(feat[,cols])))
-    
-  }
-  
-  return(sub)
-  
-}
-
-subDays <- function(fromDay, toDay) {
-  
-  fres <- NULL
-  
-  for(i in 1:length(fromDay)) {
-    
-    
-    days <- c(fromDay[i]:toDay[i])
-    
-    res <- rep(F, length(days))
-    
-    #if 1 November, T
-    res[which(days == 1)] <- T
-    
-    #if saturday (2) or sunday (3)
-    res[which(days%%7 >= 2 &  days%%7 <= 3)] <- T
-    
-    fres <- c(fres, res)
-  }
-  
-  return(fres)
-  
-}
-
-fullTreatment <- function(table, clean = FALSE, aggregateCoord = TRUE) {
-  
-  source("preprocess.R")
-  
-  if(clean){
-    cleaned1 <- toClean1(table)
-  }
-  else {
-    cleaned1 <- table
-  }
-  
-  if(aggregateCoord) {
-    library(reshape)
-    print("Melting")
-    melted <- toMelt1(cleaned1)
-    print("Casting")
-    casted <- cleanToNumeric(cast(melted, x + y ~ variable, fun = mean, na.rm = T))
-    
-  }
-  else {
-    casted <- cleanToNumeric(cleaned1[2:nrow(cleaned1),3:ncol(cleaned1)])
-    colnames(casted) <- c("x", "y", as.character(cleaned1[1, 5:ncol(cleaned1)]))
-  }
-  
-  print("removing rows with invalid coordinates")
-  casted <- casted[-which(rowSums(is.na(casted[,1:2])) > 0),]
-  
-  print("removing nan")
-  mynatable <- removenan(casted)
-  print("imputing na")
-  mynatable[,3:ncol(mynatable)] <- halfNA(mynatable[,3:ncol(mynatable)])
-  mynatable <- removenan(mynatable)
-  
-  return(mynatable)
-  
-  
-  
-}
-
-removenan <- function(x) {
-  
-  #x <- sapply(x, function(y) as.numeric(y))
-  
-  outRow <- NULL
-  for(i in 1:nrow(x)) {
-    if(!any(!is.nan(x[i,3:ncol(x)]))) {
-      outRow <- c(outRow, i)
-    }
-    
-  }
-  #remove fully nan nodes
-  if(!is.null(outRow)) {
-    
-    x <- x[-outRow,]
-    
-    
-  }
-  return(x)
-}
-
-notMatch <- function(mat1, mat2) {
-  
-  for(i in 1:nrow(mat1)) {
-    
-    if(any(mat1[i,] != mat2[i,])) {
-      
-      return(i)
-      
-    }
-    
-  }
-  
-  return(0)
-  
-}
-
-toPrepared <- function(x, manage_NA = TRUE) {
-  
-  x2 <- sapply(x[2:nrow(x),3:ncol(x)], function(x) as.numeric(as.character(x)))
-  colnames(x2) <- c("x","y",as.character(x[1,5:ncol(x)]))
-  rownames(x2) <- paste(x[2:nrow(x),1], " - ",x[2:nrow(x), 2])
-  x2 <- as.matrix(x2)
-  
-  x2 <- removenan(x2)
-  
-  if(manage_NA) {
-    x2 <- halfNA(x2)
-  }
-  
-  x2 <- removenan(x2)
-  
-  return(x2)
-}
-
-topk <- function(results, k, byVotes = FALSE, visual = F, coord = NULL) {
-  
-  votes <- results$result
-  cluster_l <- results$clusters
-  
-  topkmeasure <- vector("numeric", length = k)
-  
-  topkelementsT <- vector("numeric", length = k)
-  topkelementsI <- vector("numeric", length = k)
-  
-  if(byVotes) {
-    #byvotes
-    for(time in 1:length(cluster_l)) {
-      for(clust_i in 1:length(cluster_l[[time]])) {
-        
-        
-        clust <- cluster_l[[time]][[clust_i]]
-        if(!is.null(clust)){
-          voting <- votes[clust$nodes, time]
-          mvote <- mean(voting)
-          
-          if(mvote > topkmeasure[1]) {
-            #better priority
-            topkmeasure[1] <- mvote
-            topkelementsT[1] <- time
-            topkelementsI[1] <- clust_i
-            
-            #reorder
-            sorted <- sort(topkmeasure, index.return = T)
-            topkelementsT <- topkelementsT[sorted$ix]
-            topkelementsI <- topkelementsI[sorted$ix]
-            topkmeasure <- sorted$x
-          }
-        } 
-      }
-    }
-  }
-  else {
-    #by cluster priority
-    for(time in 1:length(cluster_l)) {
-      for(clust_i in 1:length(cluster_l[[time]])) {
-        
-        clust <- cluster_l[[time]][[clust_i]]
-        if(!is.null(clust)){
-          if(clust$priority > topkmeasure[1]) {
-            #better priority
-            topkmeasure[1] <- clust$priority
-            topkelementsT[1] <- time
-            topkelementsI[1] <- clust_i
-            
-            #reorder
-            sorted <- sort(topkmeasure, index.return = T)
-            topkelementsT <- topkelementsT[sorted$ix]
-            topkelementsI <- topkelementsI[sorted$ix]
-            topkmeasure <- sorted$x
-          }
-        }
-      } 
-    }
-  }
-  
-  result <- NULL
-  for(i in 1:k) {
-    
-    result <- c(result, list(list(cluster = cluster_l[[topkelementsT[i]]][[topkelementsI[i]]],
-                                  measure = topkmeasure[i],
-                                  time = topkelementsT[i])))
-    
-    if(visual) {
-      myTimeImage(coord, votes[,topkelementsT[i]], min = 0, max = 40,
-                  title = paste(k-i+1,"out of ",k,", time ",topkelementsT[i]))
-      myTimeImage.add_cluster(coord, cluster_l[[topkelementsT[i]]][[topkelementsI[i]]],
-                              "green")
-      #     for(other in 1:length(cluster_l[[topkelementsT[i]]])) {
-      #       if(other != topkelementsI[i]) {
-      #         myTimeImage.add_cluster(coord, cluster_l[[topkelementsT[i]]][[other]],
-      #                                 "green")
-      #       }
-      #     }
-      
-    }
-  }
-  return(result)
-}
 
 
 
-halfNA <- function(x) {
-  
-  NA_ind <- which(is.na(x))
-  for(ind in NA_ind) {
-    row <- ind %% nrow(x)
-    if(row == 0) {
-      row <- nrow(x)
-    }
-    col <- ceiling(ind / nrow(x))
-    
-    valid <- which(!is.na(x[row,]))
-    
-    minBindex <- max(which(valid < col))
-    maxAindex <- min(which(valid > col))
-    
-    if(abs(maxAindex) != Inf && abs(minBindex) != Inf) {
-      #don't impute
-      
-      minBefore <- x[row, valid[max(which(valid < col))]]
-      maxAfter <- x[row, valid[min(which(valid > col))]]
-      
-      beforeDist <- abs(col - valid[max(which(valid < col))])
-      afterDist <- abs(col - valid[min(which(valid > col))])
-      
-      
-      x[row,col] <- minBefore + beforeDist * ((maxAfter - minBefore) / (beforeDist + afterDist))
-      
-    }
-    
-  }
-  return(x)
-  
-}
+######## Training Algorithm ##############
 
 
-halfNaN <- function(x) {
-  
-  NA_ind <- which(is.nan(x))
-  for(ind in NA_ind) {
-    row <- ind %% nrow(x)
-    if(row == 0) {
-      row <- nrow(x)
-    }
-    col <- ceiling(ind / nrow(x))
-    
-    valid <- which(!is.nan(x[row,]))
-    
-    minBindex <- max(which(valid < col))
-    maxAindex <- min(which(valid > col))
-    
-    if(abs(maxAindex) != Inf && abs(minBindex) != Inf) {
-      #don't impute
-      
-      minBefore <- x[row, valid[max(which(valid < col))]]
-      maxAfter <- x[row, valid[min(which(valid > col))]]
-      
-      beforeDist <- abs(col - valid[max(which(valid < col))])
-      afterDist <- abs(col - valid[min(which(valid > col))])
-      
-      
-      x[row,col] <- minBefore + beforeDist * ((maxAfter - minBefore) / (beforeDist + afterDist))
-      
-    }
-    
-  }
-  return(x)
-  
-}
-
-
-anomaly_cluster.search_connection <- function(cluster, new_anomaly) {
-  
-  if(length(intersect(cluster$nodes, new_anomaly)) > 0 ) {
-    
-    return(TRUE)
-    
-  }
-  else {
-    return(FALSE)
-  }
-  
-  
-}
-
-anomaly_cluster.merge <- function(anomaly_cluster, new_anomaly, new_priority) {
-  
-  merged <- FALSE
-  mergedWith <- NULL
-  
-  if(!(is.null(anomaly_cluster) || length(anomaly_cluster) < 1)) {
-    
-    for(clust in 1:length(anomaly_cluster)) {
-      
-      if(anomaly_cluster.search_connection(anomaly_cluster[[clust]], new_anomaly) == TRUE) {
-        
-        anomaly_cluster[[clust]]$nodes <- union(anomaly_cluster[[clust]]$nodes, 
-                                                new_anomaly)
-        
-        #SCORRETTO: ma per ora ok
-        anomaly_cluster[[clust]]$priority <- mean(anomaly_cluster[[clust]]$priority, 
-                                                  new_priority)
-        
-        merged <- TRUE
-        mergedWith <- c(mergedWith, clust)
-      }
-      
-    }
-  }
-  
-  if(merged == FALSE) {
-    #add to cluster
-    anomaly_cluster <- c(anomaly_cluster, list(list(nodes = new_anomaly,
-                                                    priority = new_priority)))
-    
-    
-    
-  }
-  else if(length(mergedWith) >= 2) {
-    
-    #merge together all merged cluster
-    fin_clust <- mergedWith[1]
-    for(mer_clust in mergedWith[2:length(mergedWith)]) {
-      
-      anomaly_cluster[[fin_clust]]$nodes <- union(anomaly_cluster[[fin_clust]]$nodes, 
-                                                  anomaly_cluster[[mer_clust]]$nodes)
-      
-      anomaly_cluster[[fin_clust]]$priority <- mean(anomaly_cluster[[fin_clust]]$priority, 
-                                                    anomaly_cluster[[mer_clust]]$priority)
-      
-    }
-    
-    anomaly_cluster <- anomaly_cluster[-mergedWith[2:length(mergedWith)]]
-    
-  }
-  
-  return(anomaly_cluster)
-  
-}
-
-visFest <- function(data, row = sample(1:nrow(data), 1), saturday = 1, hour = 0, period = 24,
-                    startCol = 3, endCol = ncol(data)) {
-  
-  hour <- hour %% period
-  svec <- seq(startCol + hour, endCol, period)
-  festive <- c(seq(saturday, length(svec), 7), seq(saturday + 1, length(svec), 7))
-  
-  plot(data[row, seq(startCol + hour, endCol, period)], type = "o", col = "blue", pch = 16,
-       main = paste("Daily value, hour ", hour))
-  points(festive, data[row, svec[festive]], col = "red", pch = 16)
-  
-  m <- mean(data[row, svec[festive]])
-  s <- sd(data[row,svec[festive]])
-  
-  abline(h = m, col = "red")
-  abline(h = m +s, col = "purple")
-  abline(h = m - s, col = "purple")
-  
-  m2 <- mean(data[row, svec[-festive]])
-  s2 <- sd(data[row, svec[-festive]])
-  
-  abline(h = m2, col = "blue")
-  abline(h = m2 + s2, col = "turquoise1")
-  abline(h = m2 - s2, col = "turquoise1")
-  
-}
-
-from_cdf <- function(number, cdf) {
-  
-  bef <- max(which(cdf$x <= number))
-  aft <- min(which(cdf$x >= number))
-  
-  p_dist <- cdf$Fhat[aft] - cdf$Fhat[bef]
-  x_dist <- cdf$x[aft] - cdf$x[bef]
-  
-  nearB <- (number - cdf$x[bef]) / x_dist
-  
-  p_val <- cdf$Fhat[bef] + p_dist * (nearB)
-  
-  
-  return(p_val)
-  
-}
 
 STCOD_Cluster2.training <- function(cellData, festive, coordinates, period = 24, neigh_number = 10,
                                     methodAct = NULL, NA_strat = "local_mean") {
@@ -1250,7 +838,7 @@ STCOD_Cluster2.training <- function(cellData, festive, coordinates, period = 24,
   node_number <- nrow(cellData[[1]])
   final_timeslot <- ncol(cellData[[1]])
   
-
+  
   method_number = 5
   selectMethod <- vector("logical", length = method_number)
   
@@ -1680,6 +1268,1587 @@ STCOD_Cluster2.training <- function(cellData, festive, coordinates, period = 24,
   
 }
 
+
+
+
+
+############################# Priority calculation methods for ensemble ##############
+
+
+#returns: the pvalue of the value given the seasonality
+#replicas: the function replicates the seasonality for a number of time to achieve better regression model (danger of overfitting!)
+#max replicas : 5
+featureSeasonFitness <- function(feat_cell_seasonality, feat_curr_value, curr_period, replicas = 2, fit = 6, visual = FALSE) {
+  
+  maxReplicas <- 5
+  
+  #shift cell seasonality to have last slot the previous value
+  
+  #feat_cell_seasonality = [1,2,3, ... ,23,24]
+  #curr_period = 8
+  # ---> previous_seasonality <- [8,9,10, ... ,6,7]
+  
+  previous_seasonality <- shiftLeft(feat_cell_seasonality, num = (curr_period - 1))
+  
+  library(forecast)
+  
+  replicas <- min(replicas, maxReplicas)
+  
+  if(abs(max(previous_seasonality) - min(previous_seasonality)) < 0.0001) {
+    #nothing to predict, all equal
+    
+    fcasted <- max(previous_seasonality)
+    sdev <- 0.0001
+    
+  }
+  else {
+    #fit an arima to the historical data
+    #aa <- auto.arima(rep(previous_seasonality, replicas))
+    aa <- Arima(rep(previous_seasonality, replicas), c(3,0,0), c(0,1,1), method = "CSS")
+    
+    ff <- forecast(aa, h = 1, level = c(68.27, 95.45))
+    
+    #find z-score (number of standard deviation of distance from forecast value)
+    fcasted <- ff$mean[1]
+    sdev <- abs(ff$lower[1] - ff$lower[2])
+    
+  }
+  zscore <- (feat_curr_value - fcasted) / sdev
+  
+  #  pval <- 2*pnorm(-abs(zscore))
+  pval <- pnorm(zscore)
+  
+  # (1 - pval) = minimum prediction interval threshold for given value, value within 1-pval most probable
+  # pval = value is predicted within the pval less probable outcom
+  
+  if(visual == TRUE) {
+    
+    old.par <- par(mfrow = c(2,1), mai = c(0.6,1,0.5,0.5))
+    
+    plot(c(previous_seasonality, NA), type ="o", col ="blue", main = "Seasonal curve", pch = 21)
+    points(length(previous_seasonality) + 1, feat_curr_value, col = "red")
+    
+    plot(ff, main = "Forecast")
+    points(length(previous_seasonality) * replicas + 1, feat_curr_value, col = "red")
+    
+    par(old.par)
+    
+  }
+  
+  return (pval)  
+  
+}
+
+#returns: the pvalue of the value given the seasonality
+featureLastValuesFitness <- function(feat_cell_past_values, feat_curr_value, visual = FALSE) {
+  
+  #assumes last value in feat_cell_past_values is at the end
+  
+  library(forecast)
+  
+  if(abs(max(feat_cell_past_values) - min(feat_cell_past_values)) < 0.0001) {
+    #nothing to predict, all equal
+    
+    fcasted <- max(feat_cell_past_values)
+    sdev <- 0.0001
+    
+  }
+  else {
+    
+    
+    #fit an arima to the historical data
+    #aa <- auto.arima(feat_cell_past_values)
+    
+    #aa <- Arima(feat_cell_past_values, c(6,0,1))
+    aa <- Arima(feat_cell_past_values, c(0,1,0), c(0,1,0), method = "CSS-ML")
+    
+    ff <- forecast(aa, h = 1, level = c(68.27, 95.45))
+    
+    #find z-score (number of standard deviation of distance from forecast value)
+    fcasted <- ff$mean[1]
+    sdev <- abs(ff$lower[1] - ff$lower[2])
+    
+  }
+  
+  zscore <- (feat_curr_value - fcasted) / sdev
+  
+  #  pval <- 2*pnorm(-abs(zscore))
+  pval <- pnorm(zscore)
+  
+  
+  # (1 - pval) = minimum prediction interval threshold for given value, value within 1-pval most probable
+  # pval = value is predicted within the pval less probable outcome
+  
+  if(visual == TRUE) {
+    
+    old.par <- par(mfrow = c(2,1), mai = c(0.6,1,0.5,0.5))
+    
+    plot(c(feat_cell_past_values, NA), type ="o", col ="blue", main = "Past curve")
+    points(length(feat_cell_past_values) + 1, feat_curr_value, col = "red")
+    
+    plot(ff, main = "Forecast")
+    points(length(feat_cell_past_values) + 1, feat_curr_value, col = "red")
+    
+    par(old.par)
+    
+  }
+  
+  return (pval)  
+  
+}
+
+
+#returns: the pvalue of the value given the historical mean and sd for the period
+featureHistoryFitness <- function(feat_historical_period_mean, feat_historical_period_sd, feat_curr_value, visual = FALSE) {
+  
+  
+  #find z-score (number of standard deviation of distance from historical value)
+  zscore <- (feat_curr_value - feat_historical_period_mean) / feat_historical_period_sd
+  
+  #  pval <- 2*pnorm(-abs(zscore))
+  pval <- pnorm(zscore)
+  
+  
+  # (1 - pval) = minimum prediction interval threshold for given value, value within 1-pval most probable
+  # pval = value is predicted within the pval less probable outcom
+  
+  if(visual == TRUE) {
+    
+    yminlim <- min(feat_historical_period_mean - (3 * feat_historical_period_sd),
+                   feat_curr_value) - 0.5
+    ymaxlim <- max(feat_historical_period_mean + (3 * feat_historical_period_sd),
+                   feat_curr_value) + 0.5
+    
+    plot(1, type ="n", main = "Historical data", ylim = c(yminlim, ymaxlim))
+    points(feat_curr_value, col = "black", pch = 16)
+    
+    abline(h = feat_historical_period_mean, col = "green")
+    text(adj = c(0, NA), x = 0.6, y = feat_historical_period_mean + 0.15, label = "Historical Mean", col = "green")
+    
+    abline(h = feat_historical_period_mean + feat_historical_period_sd, col = "blue")
+    text(adj = c(0, NA), x = 0.6, y = feat_historical_period_mean + feat_historical_period_sd + 0.15, label = "+1 sd", col = "blue")
+    abline(h = feat_historical_period_mean - feat_historical_period_sd, col = "blue")
+    text(adj = c(0, NA), x = 0.6, y = feat_historical_period_mean - feat_historical_period_sd + 0.15, label = "-1 sd", col = "blue")
+    
+    abline(h = feat_historical_period_mean + 2 * feat_historical_period_sd, col = "purple")
+    text(adj = c(0, NA), x = 0.6, y = feat_historical_period_mean + 2 * feat_historical_period_sd + 0.15, label = "+2 sd", col = "purple")
+    abline(h = feat_historical_period_mean - 2 *feat_historical_period_sd, col = "purple")
+    text(adj = c(0, NA), x = 0.6, y = feat_historical_period_mean - 2 * feat_historical_period_sd + 0.15, label = "-2 sd", col = "purple")
+    
+    abline(h = feat_historical_period_mean + 3 * feat_historical_period_sd, col = "red")
+    text(adj = c(0, NA), x = 0.6, y = feat_historical_period_mean + 3 * feat_historical_period_sd + 0.15, label = "+3 sd", col = "red")
+    abline(h = feat_historical_period_mean - 3 *feat_historical_period_sd, col = "red")
+    text(adj = c(0, NA), x = 0.6, y = feat_historical_period_mean - 3 * feat_historical_period_sd + 0.15, label = "-3 sd", col = "red")
+    
+  }
+  
+  return (pval)  
+  
+}
+
+
+featureDistanceThresholdPVal <- function(feat_cell_season_val, feat_curr_value, distance_threshold, threshold_confidence, visual = FALSE) {
+  
+  #threshold_confidence indicates it is expected that value falls
+  #within distance_threshold with that confidence
+  
+  residual <- feat_curr_value - feat_cell_season_val
+  
+  #given confidence of 95.45%, distance_treshold is 2 sd
+  #given confidence of x, distance_treshold is zscore(1 - x) * sd?
+  
+  #  sDev <- distance_threshold / qnorm(1 - (1 - threshold_confidence)/2 )
+  sDev <- distance_threshold / qnorm(1 - (1 - threshold_confidence))
+  
+  if(sDev == 0) {
+    if(residual > 0) {
+      zscore <- 5
+    }
+    else if(residual == 0) {
+      zscore <- 0
+    }
+    else if(residual < 0) {
+      zscore <- -5
+    }
+  }
+  else{
+    zscore <- residual / sDev
+  }
+  
+  if(dir < 0) {
+    #we care if zscore is low
+    pval <- pnorm(zscore)
+    
+  }
+  else if(dir > 0) {
+    #we care if zscore is high
+    pval <- pnorm(-zscore)
+    
+  }
+  else {
+    #we care if zscore is low or high
+    pval <- pnorm(-abs(zscore))*2
+  }
+  
+  
+  if(visual == TRUE) {
+    
+    
+    yminlim <- min(feat_cell_season_val - distance_threshold,
+                   feat_curr_value) - 0.5
+    ymaxlim <- max(feat_cell_season_val + distance_threshold,
+                   feat_curr_value) + 0.5
+    
+    plot(1, type ="n", main = "Distance threshold", ylim = c(yminlim, ymaxlim))
+    rect(par("usr")[1], feat_cell_season_val - distance_threshold, 
+         par("usr")[2], feat_cell_season_val + distance_threshold, col = "whitesmoke")
+    points(feat_cell_season_val, col = "blue", pch = 21)
+    points(feat_curr_value, col = "black", pch = 16)
+    
+    abline(h = feat_cell_season_val + distance_threshold, col = "red")
+    abline(h = feat_cell_season_val - distance_threshold, col = "red")
+    
+  }
+  
+  
+  return(pval)
+  
+}
+
+featureDiffPVal <- function(season_window, measure_window,
+                            threshold, threshold_confidence, 
+                            lag, difference,
+                            dir = -1) {
+  
+  #threshold_confidence indicates it is expected that value falls
+  #within distance_threshold with that confidence
+  
+  season_residual <- measure_window - season_window
+  
+  myDiff <- diff(season_residual, lag = lag, difference)
+  residual <- myDiff[length(myDiff)]
+  
+  #given confidence of 95.45%, distance_treshold is 2 sd
+  #given confidence of x, distance_treshold is zscore(1 - x) * sd?
+  
+  # sDev <- descent_threshold / qnorm(1 - (1 - threshold_confidence)/2 )
+  sDev <- threshold / qnorm(threshold_confidence)  
+  
+  if(sDev == 0) {
+    if(residual > 0) {
+      zscore <- 5
+    }
+    else if(residual == 0) {
+      zscore <- 0
+    }
+    else if(residual < 0) {
+      zscore <- -5
+    }
+  }
+  else{
+    zscore <- residual / sDev
+  }
+  
+  if(dir < 0) {
+    #we care if zscore is low
+    pval <- pnorm(zscore)
+    
+  }
+  else if(dir > 0) {
+    #we care if zscore is high
+    pval <- pnorm(-zscore)
+    
+  }
+  else {
+    #we care if zscore is low or high
+    pval <- pnorm(-abs(zscore))*2
+  }
+  
+  
+  return(pval)
+  
+  
+}
+
+
+featureTrendThresholdPVal <- function(feat_cell_season_val, feat_prev_cell_season_val,
+                                      feat_curr_value, feat_prev_value, 
+                                      descent_threshold, 
+                                      threshold_confidence,
+                                      visual = FALSE,
+                                      dir = -1) {
+  
+  #threshold_confidence indicates it is expected that value falls
+  #within distance_threshold with that confidence
+  
+  curr_residual <- feat_curr_value - feat_prev_value
+  season_residual <- feat_cell_season_val - feat_prev_cell_season_val
+  
+  residual <- curr_residual - season_residual
+  
+  #given confidence of 95.45%, distance_treshold is 2 sd
+  #given confidence of x, distance_treshold is zscore(1 - x) * sd?
+  
+  # sDev <- descent_threshold / qnorm(1 - (1 - threshold_confidence)/2 )
+  sDev <- descent_threshold / qnorm(threshold_confidence)  
+  
+  if(sDev == 0) {
+    if(residual > 0) {
+      zscore <- 5
+    }
+    else if(residual == 0) {
+      zscore <- 0
+    }
+    else if(residual < 0) {
+      zscore <- -5
+    }
+  }
+  else{
+    zscore <- residual / sDev
+  }
+  
+  if(dir < 0) {
+    #we care if zscore is low
+    pval <- pnorm(zscore)
+    
+  }
+  else if(dir > 0) {
+    #we care if zscore is high
+    pval <- pnorm(-zscore)
+    
+  }
+  else {
+    #we care if zscore is low or high
+    pval <- pnorm(-abs(zscore))*2
+  }
+  
+  if(visual == TRUE) {
+    
+    old.par <- par(mfrow = c(2,1), mai = c(0.6,1,0.5,0.5))
+    
+    yminlim <- min(feat_cell_season_val, feat_prev_cell_season_val,
+                   feat_curr_value, feat_prev_value) - 0.5
+    ymaxlim <- max(feat_cell_season_val, feat_prev_cell_season_val,
+                   feat_curr_value, feat_prev_value) + 0.5
+    
+    plot(1, type ="n", main = "Trends", xlim = c(-0.5, +1.5), ylim = c(yminlim, ymaxlim))
+    points(c(0, 1), c(feat_prev_cell_season_val, feat_cell_season_val), col = "blue", pch = 21)
+    lines(c(0, 1), c(feat_prev_cell_season_val, feat_cell_season_val), col = "blue")
+    points(c(0, 1), c(feat_prev_value, feat_curr_value), col = "black", pch = 16)
+    lines(c(0, 1), c(feat_prev_value, feat_curr_value), col = "black")
+    
+    plot(1, type ="n", main ="Threshold", xlim = c(-1, 1), ylim = c(-1, 1))
+    abline(a = 0, b = (feat_cell_season_val - feat_prev_cell_season_val), col = "blue")
+    abline(a = 0, b = (feat_curr_value - feat_prev_value), col = "black")
+    abline(a = 0, b = (feat_cell_season_val - feat_prev_cell_season_val) + descent_threshold, col = "red")
+    abline(a = 0, b = (feat_cell_season_val - feat_prev_cell_season_val) - descent_threshold, col = "red")   
+    #further sd thresholds
+    abline(a = 0, b = (feat_cell_season_val - feat_prev_cell_season_val) + 2 * descent_threshold, col = "purple")
+    abline(a = 0, b = (feat_cell_season_val - feat_prev_cell_season_val) - 2 * descent_threshold, col = "purple")    
+    
+    
+    par(old.par)
+    
+  }
+  
+  
+  return(pval)
+  
+}
+
+
+from_cdf <- function(number, cdf) {
+  
+  bef <- max(which(cdf$x <= number))
+  aft <- min(which(cdf$x >= number))
+  
+  if(bef < 1) {
+    p_val <- 0
+  }
+  else if (aft > length(cdf$x)) {
+    p_val <- 1
+  }
+  else {
+    
+    p_dist <- cdf$Fhat[aft] - cdf$Fhat[bef]
+    x_dist <- cdf$x[aft] - cdf$x[bef]
+    
+    nearB <- (number - cdf$x[bef]) / x_dist
+    
+    p_val <- cdf$Fhat[bef] + p_dist * (nearB)
+  }
+  
+  return(p_val)
+  
+}
+
+
+############################# Fisher Test and priority combination ##############
+
+
+fastGeneralFisherScan <- function(priorities, anomThreshold = 0.95) {
+  
+  
+  #order priorities
+  prior_order <- sort(priorities, decreasing = TRUE,index.return = T)$ix
+  
+  subset <- NULL
+  Fun <- rep( 0  , length(prior_order))
+  
+  #in order, calculate F(S)
+  for (size in c(1:length(prior_order))) {
+    
+    nodes <- prior_order[1:size]
+    
+    Fun[size] <- fisherCombinedPriority(1 - priorities[nodes])
+    
+    #Fun[size:length(Fun)] <- Fun[size:length(Fun)] - (2 * log(1 - priorities[node]))
+    
+  }
+  
+  string <- NULL
+  
+  final_scores <- Fun
+  
+  #Best result
+  
+  bestSize <- 0
+  bestScore <- 0
+  
+  for(size in c(1:length(prior_order))) {
+    if(final_scores[size] >= bestScore) {
+      bestScore <- final_scores[size]
+      bestSize <- size  
+    }
+  }
+  for(size in c(1:bestSize)) {
+    string <- paste(string," ", prior_order[size])
+  }
+  
+  if(bestScore > anomThreshold) {
+    #print(paste("Set ",size,", neighbours (",string,"), score ",bestScore))
+  }
+  
+  return(list(vote = bestScore,
+              nodes = prior_order[1:bestSize]))
+  
+}
+
+fastGeneralWeightedFisherScan <- function(priorities, weights, anomThreshold = 0.95, base_priority = 0.68) {
+  
+  #transform priorities according to their weight
+  for(p in (1:length(priorities))) {
+    
+    priorities[p] <- priorityWeight(priorities[p], weights[p], base_priority)
+    
+  }
+  
+  #order priorities
+  prior_order <- sort(priorities, decreasing = TRUE,index.return = T)$ix
+  
+  subset <- NULL
+  Fun <- rep( 0  , length(prior_order))
+  
+  #in order, calculate F(S)
+  for (size in c(1:length(prior_order))) {
+    
+    nodes <- prior_order[1:size]
+    
+    Fun[size] <- fisherCombinedPriority(1 - priorities[nodes])
+    
+    #Fun[size:length(Fun)] <- Fun[size:length(Fun)] - (2 * log(1 - priorities[node]))
+    
+  }
+  
+  string <- NULL
+  
+  final_scores <- Fun
+  
+  #Best result
+  
+  bestSize <- 0
+  bestScore <- 0
+  
+  #do not report clusters of less than 3 nodes
+  minSize <- 3
+  
+  for(size in c(minSize:length(prior_order))) {
+    if(final_scores[size] >= bestScore) {
+      bestScore <- final_scores[size]
+      bestSize <- size  
+    }
+  }
+  for(size in c(1:bestSize)) {
+    string <- paste(string," ", prior_order[size])
+  }
+  
+  if(bestScore > anomThreshold) {
+    #print(paste("Set ",size,", neighbours (",string,"), score ",bestScore))
+  }
+  
+  return(list(vote = bestScore,
+              nodes = prior_order[1:bestSize]))
+  
+}
+
+
+#pvector: pvalues for the univariate\multivariate case
+#returns: the priority of the combined
+priority_function <- function(pvector, alfa) {
+  
+  
+  #return the fisher combined probability -> the priority function for itself
+  #this is thanks to its chi-square distribution, the sum of two sample of which results in
+  #a chi-square distribution
+  
+  #this property allows fisher's test to satisfy the strong LTSS property
+  #it is preferable to common ltss count-based function that do not account for
+  #multiple hypotesis testing
+  return(fisherCombinedPriority(pvector))
+  
+  
+}
+
+fisher.show <- function(priorities) {
+  
+  changingp <- c(1000:0)/1000
+  res <- NULL
+  for(i in 1:length(changingp)) {
+    res <- c(res, fisherCombinedPriority(c(1 - priorities, changingp[i])))
+  }
+  sting <- paste(priorities, collapse = ", ")
+  string <- paste("Fisher curve, starting priorities", sting)
+  #plot(1 - changingp, 1 - changingp, type = "l", main = string)
+  plot(1 - changingp, res, col = "red", type = "l", main = string, ylim = c(0,1))
+  abline(h = fisherCombinedPriority(c(1 - priorities)), col = "blue")
+  
+  lineL <- 10
+  for(j in 1:length(priorities)) {
+    points((1:lineL)/1000, rep(priorities[j],lineL), col = "purple", type = "l")
+  }
+  
+}
+fisher.show2 <- function(normPriorities, changPriority, changWeight) {
+  
+  changingb <- c(1000:0)/1000
+  res <- NULL
+  for(i in 1:length(changingb)) {
+    res <- c(res, fisherCombinedPriority(c(1 - normPriorities, 
+                                           1 - priorityWeight(changPriority, changWeight, changingb[i]))))
+  }
+  
+  plot(res, type = "o")
+}
+
+#normPriorities already weighted with their baselines
+fisher.baseChange <- function(normPriorities) {
+  
+  changingb <- c(0:1000)/1000
+  res <- NULL
+  minres <- Inf
+  minb <- -1
+  for(i in 1:length(changingb)) {
+    
+    orig <- fisherCombinedPriority(c(1 - normPriorities))
+    
+    add <- fisherCombinedPriority(c(1 - normPriorities,  1 - changingb[i]))
+    
+    if(abs(add - orig) < minres) {
+      minres <- abs(add-orig)
+      minb <- changingb[i]
+    }
+    else if (abs(add - orig) == minres) {
+      
+      minb <- c(minb, changingb[i])
+      
+    }
+    res <- c(res, add - orig)
+  }
+  #plot(abs(res), type = "l")
+  
+  return(list(base = minb,
+              error = minres))
+}
+
+fisher.tryConvergence <- function(priorities = c(0.5, 0.3, 0.7, 0.3), weights = c(0.7, 0.8, 0.8, 0.3), 
+                                  baseStart = 0.7, iterations = 10) {
+  
+  
+  baselines <- rep(baseStart, length(priorities))
+  
+  errorGrowth <- NULL
+  histErrors <- NULL
+  
+  string <- paste(baselines, collapse = ", ")
+  print(paste("Start baselines: ",string))
+  
+  
+  lasterrors <- NULL
+  
+  weightPriorities <- priorities
+  for(i in 1:length(priorities)) {
+    #compute weightede priority with old weights
+    weightPriorities[i] <- priorityWeight(priorities[i], weights[i], baselines[i])
+    
+  }
+  
+  #Initial error
+  for(i in  1:length(priorities)) {
+    
+    orig <- fisherCombinedPriority(c(1 - weightPriorities[-i]))
+    
+    add <- fisherCombinedPriority(c(1 - weightPriorities[-i],  1 - baselines[i]))
+    
+    lasterrors <- c(lasterrors, abs(add - orig))
+  }
+  
+  histErrors <- c(histErrors, sum(lasterrors ^ 2))
+  
+  #Iterative process
+  for(it in 1:iterations) {
+    
+    print(paste("Iteration ", it))
+    
+    newBaselines <- baselines
+    weightPriorities <- priorities
+    
+    print("Computing weighted Priorities")
+    for(i in 1:length(priorities)) {
+      #compute weightede priority with old weights
+      weightPriorities[i] <- priorityWeight(priorities[i], weights[i], baselines[i])
+      
+    }
+    
+    errors <- NULL
+    print("Computing new baselines")
+    for(i in 1:length(priorities)) {
+      #compute baselines that minimizes difference
+      fisher_test <- fisher.baseChange(weightPriorities[-i])
+      newBaselines[i] <- fisher_test$base 
+      errors <- c(errors, fisher_test$error)
+    }
+    
+    errorGrowth <- errors - lasterrors #c(errorGrowth, sum(errors ^ 2))
+    
+    newDiff <- baselines - newBaselines
+    
+    growing <- which(errorGrowth > 0)
+    
+    newBaselines[growing] <- baselines[growing] 
+    
+    
+    string <- paste(newBaselines, collapse = ", ")
+    print(paste("New baselines: ",string))
+    baselines <- newBaselines
+    lasterrors <- errors
+    histErrors <- c(histErrors, sum(errors ^ 2))
+  }
+  
+  plot(0:iterations, histErrors, type = "o", main ="SSError / iteration")
+  
+}
+
+#input: the pvalues
+#Returns fisher combined test (higher = worse!) a priority
+fisherCombinedPriority <- function(pvector) {
+  
+  max_priority <- 0.99999
+  
+  #to avoid problems, pvalues = 0 are considered with small but not zero value
+  pvector[pvector < (1 - max_priority)] <- (1 - max_priority)
+  
+  #Fisher's combined probability test
+  #
+  fisher <- pchisq(-2 * (sum(log(pvector))), df = 2*length(pvector))
+  
+  return(fisher)
+  
+}
+
+#weight between 0 and 1
+#low weight will be indicated via base_priority
+# everything with higher than base_priority will be lowered to the base_priority if their weight is low
+# everything with lower than base_priority will be raised to the base_priority if their weight is low
+
+#Base priority represents the priority of a node that doesn't give me any information on whether to 
+#accept or reject the normality\anomalousness hypothesis
+priorityWeight <- function(priority, weight, base_priority) {
+  
+  pval <- 1 - priority
+  base_confidence <- 1 - base_priority
+  
+  myPower <- pwr( (pval - base_confidence), 1 / weight) + base_confidence
+  dist <- myPower - pval
+  
+  if(pval < base_confidence) {
+    wpval <- myPower - (dist * (abs(pval - base_confidence)/base_confidence)^(1/weight))
+  }
+  else {
+    wpval <- myPower - (dist * (abs(pval - base_confidence)/ (1 - base_confidence) )^(1/weight))
+    
+  }
+  
+  return(1 - wpval)
+  
+}
+
+
+#input: weights, and the pvalues
+#Returns fisher combined test (higher = worse!) a priority
+fisherWeightedCombinedPriority <- function(weights, pvector) {
+  
+  if(max(weights) > 1) {
+    weights <- weights / max(weights)
+  }
+  
+  priorities <- 1 - pvector
+  #wpriorities <- weights * priorities
+  wpriorities <- pchisq(qgamma(priorities, shape = weights / 2, scale = 2), df = 1)
+  wpvalues <- 1 - wpriorities
+  
+  #Fisher's combined probability test
+  #
+  fisher <- pchisq(-2 * (sum(log(wpvalues))), df = 2*length(pvector))
+  
+  return(fisher)
+  
+}
+
+
+#input: weights and pvalues
+#weights are normalized to sum to 1 before applying
+#Returns lancaster generalized fisher test, a priority
+lancasterGeneralizedFisher <- function(weights, pvalues) {
+  
+  weights <- weights / sum(weights)
+  
+  priorities <- 1 - pvalues
+  
+  lancaster <- pchisq( sum(qgamma(priorities, shape = weights / 2, scale = 2)),
+                       df = sum(weights))
+  
+  return(lancaster)
+  
+}
+
+testLancaster <- function() {
+  
+  lancaster_growth <- NULL
+  other <- NULL
+  other2 <- NULL
+  other3 <- NULL
+  other4 <- NULL
+  for(i in 1:100) {
+    
+    #assume growing weights*priority
+    i <- i/100
+    
+    pi <- runif(1,0,1)
+    wi <- i / pi
+    
+    
+    
+    other <- c(other, qgamma(pi, shape = wi / 2, scale = 2))
+    other2 <- c(other2, qgamma(pi, shape = 1 / 2, scale = 2))
+    
+    other3 <- c(other3, pchisq(sum(qgamma(pi, shape = wi / 2, scale = 2)),
+                               df = sum(wi)))
+    other4 <- c(other4, pchisq(sum(qgamma(pi, shape = 1 / 2, scale = 2)),
+                               df = sum(1)))
+    
+    #thus we have wi*pi = i, therefore growing at each iteration
+    #let's check that wi*pi can be a valid priority metric (combined priority raises with it - convexity)
+    
+    lancaster_growth <- c(lancaster_growth,
+                          lancasterGeneralizedFisher(c(0.5, wi), c(0.7, pi)))
+    
+    
+  }
+  
+  #various ordering
+  ord <- sort(other, index.return = T)$ix
+  ord2 <- sort(other2, index.return = T)$ix
+  ord3 <- sort(other3, index.return = T)$ix
+  ord4 <- sort(other4, index.return = T)$ix
+  
+  #plotting this shows that sets containing couples wi, pi with high priority do not always have higher
+  #values of lanc.gf than sets containing lower couples.
+  
+  return(lancaster_growth)
+  
+}
+
+testLancaster2 <- function() {
+  
+  lancaster_growth <- NULL
+  gamma_growth <- NULL
+  
+  for(i in 1:100) {
+    
+    #generate random weight and pvalues
+    
+    wi <- runif(1,0,1)
+    pi <- runif(1,0,1)
+    
+    #generate quality (G(s))
+    gamma_growth <- c(gamma_growth, qgamma(1 - pi, shape = wi / 2, scale = 2))
+    
+    lancaster_growth <- c(lancaster_growth,
+                          lancasterGeneralizedFisher(c(0.5, wi), c(0.7, pi)))
+    
+    
+  }
+  
+  #let's check if ordering lancaster_growth according to gamma_growth yields results
+  
+  sortorder <- sort.int(gamma_growth, index.return = T)$ix
+  lancaster_ord <- lancaster_growth[sortorder]
+  
+  return(lancaster_ord)
+  
+}
+
+testWeightedFisher <- function() {
+  
+  fisher_growth <- NULL
+  
+  for(i in 1:100) {
+    
+    #assume growing weights*priority
+    i <- i/100
+    
+    pi <- runif(1,0,1)
+    wi <- i / pi
+    
+    #thus we have wi*pi = i, therefore growing at each iteration
+    #let's check that wi*pi can be a valid priority metric (combined priority raises with it - convexity)
+    
+    fisher_growth <- c(fisher_growth,
+                       fisherCombinedPriority(c(0.6*0.8, 1 - wi*pi)))
+    
+    
+    
+  }
+  
+  return(fisher_growth)
+  
+}
+
+testWeightedFisher2 <- function() {
+  
+  fisher_growth <- NULL
+  weighted_growth <- NULL
+  
+  for(i in 1:1000) {
+    
+    #Calculate random weights and pvalues
+    wi <- runif(1,0,1)
+    pi <- runif(1,0,1)
+    
+    #Calculate priority from weight and pval
+    #for a confidence threshold of 0.35
+    confid <- 0.35
+    powered <-  pwr((pi - confid) , 1 / wi) + confid
+    weighted_growth <- c(weighted_growth, 1 - powered)
+    
+    fisher_growth <- c(fisher_growth,
+                       fisherCombinedPriority(c(0.8, powered)))
+    
+  }
+  
+  #let's check if ordering lancaster_growth according to gamma_growth yields results
+  
+  sortorder <- sort.int(weighted_growth, index.return = T)$ix
+  fisher_ord <- fisher_growth[sortorder]
+  
+  
+  return(fisher_ord)
+  
+}
+
+
+
+
+##################### Anomaly clusters operation ###########
+
+anomaly_cluster.search_connection <- function(cluster, new_anomaly) {
+  
+  if(length(intersect(cluster$nodes, new_anomaly)) > 0 ) {
+    
+    return(TRUE)
+    
+  }
+  else {
+    return(FALSE)
+  }
+  
+  
+}
+
+anomaly_cluster.merge <- function(anomaly_cluster, new_anomaly, new_priority) {
+  
+  merged <- FALSE
+  mergedWith <- NULL
+  
+  if(!(is.null(anomaly_cluster) || length(anomaly_cluster) < 1)) {
+    
+    for(clust in 1:length(anomaly_cluster)) {
+      
+      if(anomaly_cluster.search_connection(anomaly_cluster[[clust]], new_anomaly) == TRUE) {
+        
+        anomaly_cluster[[clust]]$nodes <- union(anomaly_cluster[[clust]]$nodes, 
+                                                new_anomaly)
+        
+        #SCORRETTO: ma per ora ok
+        anomaly_cluster[[clust]]$priority <- mean(anomaly_cluster[[clust]]$priority, 
+                                                  new_priority)
+        
+        merged <- TRUE
+        mergedWith <- c(mergedWith, clust)
+      }
+      
+    }
+  }
+  
+  if(merged == FALSE) {
+    #add to cluster
+    anomaly_cluster <- c(anomaly_cluster, list(list(nodes = new_anomaly,
+                                                    priority = new_priority)))
+    
+    
+    
+  }
+  else if(length(mergedWith) >= 2) {
+    
+    #merge together all merged cluster
+    fin_clust <- mergedWith[1]
+    for(mer_clust in mergedWith[2:length(mergedWith)]) {
+      
+      anomaly_cluster[[fin_clust]]$nodes <- union(anomaly_cluster[[fin_clust]]$nodes, 
+                                                  anomaly_cluster[[mer_clust]]$nodes)
+      
+      anomaly_cluster[[fin_clust]]$priority <- mean(anomaly_cluster[[fin_clust]]$priority, 
+                                                    anomaly_cluster[[mer_clust]]$priority)
+      
+    }
+    
+    anomaly_cluster <- anomaly_cluster[-mergedWith[2:length(mergedWith)]]
+    
+  }
+  
+  return(anomaly_cluster)
+  
+}
+
+
+##################### Support Functions #############
+
+
+#Computes discounted similarity between windows to compute weights between neighbors
+similarity_check <- function(prev_priority_own, prev_priority_neigh) {
+  
+  discount <- 0.6
+  
+  dissimilar <- 0
+  max_dissimilarity <- 0
+  
+  for(mem in (1:length(prev_priority_own))) {
+    dissimilar <- dissimilar + abs(prev_priority_own[mem] - prev_priority_neigh[mem]) *discount ^(mem - 1)
+    max_dissimilarity <- max_dissimilarity + 1 *discount ^(mem - 1)
+  }
+  
+  return(1 - (dissimilar / max_dissimilarity))
+  
+}
+
+#surpassed by training ?
+updateSeasonality <- function(node_seasonality, curr_values, curr_period, curr_status, noSeasonPresent = FALSE) {
+  
+  cellUpdateRateOK <- 0.7
+  cellUpdateRateOUT <- 0.3
+  
+  cellUpdateRate <- 0
+  
+  if(noSeasonPresent == TRUE) {
+    
+    node_seasonality[,curr_period] <- curr_values
+    
+  }
+  else {
+    
+    if(curr_status == "OK") {
+      
+      cellUpdateRate <- cellUpdateRateOK
+      
+    }
+    else if(curr_status == "Anomaly") {
+      
+      cellUpdateRate <- cellUpdateRateOUT
+      
+    }
+    else {
+      #default
+      cellUpdateRate <- cellUpdateRateOK
+    }
+    
+    node_seasonality[,curr_period] <- ((1 - cellUpdateRate) * node_seasonality[,curr_period]) + (cellUpdateRate * curr_values)
+    
+  }
+  
+  return(node_seasonality)
+  
+  
+}
+
+#shift cells of a vector one position to the right, with wrapping
+#shiftRight([1,2,3,4,5], num = 2) --> [4,5,1,2,3]
+shiftRight <- function(vec, num = 1) {
+  
+  vec <- c(vec[(length(vec) - num + 1):length(vec)],vec[1:(length(vec)-num)])
+  return(vec)
+  
+}
+
+#shift cells of a vector num position to the left, with wrapping
+#shiftLeft([1,2,3,4,5], num = 2) --> [3,4,5,1,2]
+#num must be < length(vec)
+
+shiftLeft <- function(vec, num = 1) {
+  
+  if(is.null(vec) || length(vec) < 1) {
+    return(NULL)
+  }
+  
+  while(num >= length(vec)) {
+    num <- num - length(vec)
+  }
+  
+  if(num > 0) {
+    vec <- c(vec[(1 + num) : length(vec)],vec[1:num])
+  }
+  
+  return(vec)
+  
+}
+
+shiftRightMatrix <- function(mat, num = 1) {
+  
+  m1 <- matrix(mat[,(ncol(mat) - num + 1):ncol(mat)], ncol = num)
+  m2 <- matrix(mat[,1:(ncol(mat)-num)], ncol = ncol(mat) - num)
+  
+  mat <- cbind(m1,m2)
+  return(mat)
+  
+}
+
+
+##################### Other Functions - Preprocess, visualization, analysis ###########
+
+#Used from console
+#Prints the day and hour relative to a time slot.
+#Use offset to indicate number of starting day if the database does not start from 1
+#ex: for week 1 - offset = 1;
+#week 2 - offset = 9
+#week 3 - offset = 16
+#week 4 - offset = 23
+col.printDate <- function(col, offset = 1) {
+  
+  print(paste("Day ", floor((col - 1)/24) + offset, ", hour ",(col -1)%%24,":00", collapse = ""))
+
+  
+}
+
+#Returns a list of data from the whole dataset
+#Assumes the dataset first two column for each feature are the coordinates
+#Does not reduce number of locations
+subData <- function(dataset, fromDay, toDay, features = 1:length(dataset)) {
+  
+  sub <- NULL
+  cols <- NULL
+  for(i in 1:length(fromDay)) {
+    
+    cols <- c(cols, 2 + c(((fromDay[i] - 1)*24 + 1) : (toDay[i]*24)))
+  }
+  
+  for(featInd in features) {
+    
+    feat <- dataset[[featInd]]
+    
+    sub <- c(sub, list(as.matrix(feat[,cols])))
+    
+  }
+  
+  return(sub)
+  
+}
+
+#Returns a vector with T if a day is festive and F if it is not.
+#The days refer to the november dataset, with 1 November being a Friday
+subDays <- function(fromDay, toDay) {
+  
+  fres <- NULL
+  
+  for(i in 1:length(fromDay)) {
+    
+    
+    days <- c(fromDay[i]:toDay[i])
+    
+    res <- rep(F, length(days))
+    
+    #if 1 November, T
+    res[which(days == 1)] <- T
+    
+    #if saturday (2) or sunday (3)
+    res[which(days%%7 >= 2 &  days%%7 <= 3)] <- T
+    
+    fres <- c(fres, res)
+  }
+  
+  return(fres)
+  
+}
+
+#Gets a table obtained from a csv, cleans it if not already done (set flag!)
+#If needed, aggregates data according to coordinates
+#Removes rows without data, imputes na
+#
+#After the process return the data.frame with x,y, and time wide values
+#
+#To use with other features, time sets, merge by x y to find common coordinates.
+fullTreatment <- function(table, clean = FALSE, aggregateCoord = TRUE) {
+  
+  source("preprocess.R")
+  
+  if(clean){
+    cleaned1 <- toClean1(table)
+  }
+  else {
+    cleaned1 <- table
+  }
+  
+  if(aggregateCoord) {
+    library(reshape)
+    print("Melting")
+    melted <- toMelt1(cleaned1)
+    print("Casting")
+    casted <- cleanToNumeric(cast(melted, x + y ~ variable, fun = mean, na.rm = T))
+    
+  }
+  else {
+    casted <- cleanToNumeric(cleaned1[2:nrow(cleaned1),3:ncol(cleaned1)])
+    colnames(casted) <- c("x", "y", as.character(cleaned1[1, 5:ncol(cleaned1)]))
+  }
+  
+  print("removing rows with invalid coordinates")
+  casted <- casted[-which(rowSums(is.na(casted[,1:2])) > 0),]
+  
+  print("removing nan")
+  mynatable <- removenan(casted)
+  print("imputing na")
+  mynatable[,3:ncol(mynatable)] <- halfNA(mynatable[,3:ncol(mynatable)])
+  mynatable <- removenan(mynatable)
+  
+  return(mynatable)
+  
+  
+  
+}
+
+
+#Shows behaviour of a random location, in a specified hour during days, to see difference
+#between ferial and festive data
+visFest <- function(data, row = sample(1:nrow(data), 1), saturday = 1, hour = 0, period = 24,
+                    startCol = 3, endCol = ncol(data)) {
+  
+  hour <- hour %% period
+  svec <- seq(startCol + hour, endCol, period)
+  festive <- c(seq(saturday, length(svec), 7), seq(saturday + 1, length(svec), 7))
+  
+  plot(data[row, seq(startCol + hour, endCol, period)], type = "o", col = "blue", pch = 16,
+       main = paste("Daily value, hour ", hour))
+  points(festive, data[row, svec[festive]], col = "red", pch = 16)
+  
+  m <- mean(data[row, svec[festive]])
+  s <- sd(data[row,svec[festive]])
+  
+  abline(h = m, col = "red")
+  abline(h = m +s, col = "purple")
+  abline(h = m - s, col = "purple")
+  
+  m2 <- mean(data[row, svec[-festive]])
+  s2 <- sd(data[row, svec[-festive]])
+  
+  abline(h = m2, col = "blue")
+  abline(h = m2 + s2, col = "turquoise1")
+  abline(h = m2 - s2, col = "turquoise1")
+  
+}
+
+
+#Removes rows without valid numbers
+#Assumes first two rows are coordinates and does not consider their values
+removenan <- function(x) {
+  
+  #x <- sapply(x, function(y) as.numeric(y))
+  
+  outRow <- NULL
+  for(i in 1:nrow(x)) {
+    if(!any(!is.nan(x[i,3:ncol(x)]))) {
+      outRow <- c(outRow, i)
+    }
+    
+  }
+  #remove fully nan nodes
+  if(!is.null(outRow)) {
+    
+    x <- x[-outRow,]
+    
+    
+  }
+  return(x)
+}
+
+
+#Returns best anomalies
+topk <- function(results, k, byVotes = FALSE, visual = F, coord = NULL) {
+  
+  votes <- results$result
+  cluster_l <- results$clusters
+  
+  topkmeasure <- vector("numeric", length = k)
+  
+  topkelementsT <- vector("numeric", length = k)
+  topkelementsI <- vector("numeric", length = k)
+  
+  if(byVotes) {
+    #byvotes
+    for(time in 1:length(cluster_l)) {
+      for(clust_i in 1:length(cluster_l[[time]])) {
+        
+        
+        clust <- cluster_l[[time]][[clust_i]]
+        if(!is.null(clust)){
+          voting <- votes[clust$nodes, time]
+          mvote <- mean(voting)
+          
+          if(mvote > topkmeasure[1]) {
+            #better priority
+            topkmeasure[1] <- mvote
+            topkelementsT[1] <- time
+            topkelementsI[1] <- clust_i
+            
+            #reorder
+            sorted <- sort(topkmeasure, index.return = T)
+            topkelementsT <- topkelementsT[sorted$ix]
+            topkelementsI <- topkelementsI[sorted$ix]
+            topkmeasure <- sorted$x
+          }
+        } 
+      }
+    }
+  }
+  else {
+    #by cluster priority
+    for(time in 1:length(cluster_l)) {
+      for(clust_i in 1:length(cluster_l[[time]])) {
+        
+        clust <- cluster_l[[time]][[clust_i]]
+        if(!is.null(clust)){
+          if(clust$priority > topkmeasure[1]) {
+            #better priority
+            topkmeasure[1] <- clust$priority
+            topkelementsT[1] <- time
+            topkelementsI[1] <- clust_i
+            
+            #reorder
+            sorted <- sort(topkmeasure, index.return = T)
+            topkelementsT <- topkelementsT[sorted$ix]
+            topkelementsI <- topkelementsI[sorted$ix]
+            topkmeasure <- sorted$x
+          }
+        }
+      } 
+    }
+  }
+  
+  result <- NULL
+  for(i in 1:k) {
+    
+    result <- c(result, list(list(cluster = cluster_l[[topkelementsT[i]]][[topkelementsI[i]]],
+                                  measure = topkmeasure[i],
+                                  time = topkelementsT[i])))
+    
+    if(visual) {
+      myTimeImage(coord, votes[,topkelementsT[i]], min = 0, max = 40,
+                  title = paste(k-i+1,"out of ",k,", time ",topkelementsT[i]))
+      myTimeImage.add_cluster(coord, cluster_l[[topkelementsT[i]]][[topkelementsI[i]]],
+                              "green")
+      #     for(other in 1:length(cluster_l[[topkelementsT[i]]])) {
+      #       if(other != topkelementsI[i]) {
+      #         myTimeImage.add_cluster(coord, cluster_l[[topkelementsT[i]]][[other]],
+      #                                 "green")
+      #       }
+      #     }
+      
+    }
+  }
+  return(result)
+}
+
+
+#Imputes NA with nearest value
+#Generates warnings when NA are at the start or end of a series
+#Does not impute those NA since they have no meaning
+halfNA <- function(x) {
+  
+  NA_ind <- which(is.na(x))
+  for(ind in NA_ind) {
+    row <- ind %% nrow(x)
+    if(row == 0) {
+      row <- nrow(x)
+    }
+    col <- ceiling(ind / nrow(x))
+    
+    valid <- which(!is.na(x[row,]))
+    
+    minBindex <- max(which(valid < col))
+    maxAindex <- min(which(valid > col))
+    
+    if(abs(maxAindex) != Inf && abs(minBindex) != Inf) {
+      #don't impute
+      
+      minBefore <- x[row, valid[max(which(valid < col))]]
+      maxAfter <- x[row, valid[min(which(valid > col))]]
+      
+      beforeDist <- abs(col - valid[max(which(valid < col))])
+      afterDist <- abs(col - valid[min(which(valid > col))])
+      
+      
+      x[row,col] <- minBefore + beforeDist * ((maxAfter - minBefore) / (beforeDist + afterDist))
+      
+    }
+    
+  }
+  return(x)
+  
+}
+
+#Same as halfNA, with NaN
+halfNaN <- function(x) {
+  
+  NA_ind <- which(is.nan(x))
+  for(ind in NA_ind) {
+    row <- ind %% nrow(x)
+    if(row == 0) {
+      row <- nrow(x)
+    }
+    col <- ceiling(ind / nrow(x))
+    
+    valid <- which(!is.nan(x[row,]))
+    
+    minBindex <- max(which(valid < col))
+    maxAindex <- min(which(valid > col))
+    
+    if(abs(maxAindex) != Inf && abs(minBindex) != Inf) {
+      #don't impute
+      
+      minBefore <- x[row, valid[max(which(valid < col))]]
+      maxAfter <- x[row, valid[min(which(valid > col))]]
+      
+      beforeDist <- abs(col - valid[max(which(valid < col))])
+      afterDist <- abs(col - valid[min(which(valid > col))])
+      
+      
+      x[row,col] <- minBefore + beforeDist * ((maxAfter - minBefore) / (beforeDist + afterDist))
+      
+    }
+    
+  }
+  return(x)
+  
+}
+
+
+
+myTimeImage <- function(coord, vals, min = NULL, max = NULL,title = NULL) {
+  
+  if(is.null(min)){
+    min <- min(vals)
+  }
+  if(is.null(max)) {
+    max <- max(vals)
+  }
+  
+  vals <- rowMeans(as.matrix(vals), na.rm = T)
+  
+  mypal <- colorRampPalette( c( "blue", "red" ) )( 5 )
+  
+  cols <- map2color(vals, mypal, limits = c(min, max))
+  
+  plot(coord[,1], coord[,2], col = cols, main = title, pch = 19)
+  
+  
+}
+
+myTimeImage.add_cluster <- function(coord, cluster, color) {
+  
+  clust <- cluster$nodes
+  points(coord[clust, 1], coord[clust, 2], pch = 19, col = color)
+}
+
+slidingWindowsImage <- function(coord, vals, window, min = NULL, max = NULL, overlap = FALSE, save = NULL) {
+  
+  if(is.null(min)){
+    min <- min(vals)
+  }
+  if(is.null(max)) {
+    max <- max(vals)
+  }
+  
+  
+  valMat <- as.matrix(vals)
+  timeslots <- ncol(valMat)
+  
+  if(timeslots < window || window < 1) {
+    return (NULL)
+  }
+  
+  
+  
+  if(overlap == TRUE) {
+    for(i in (1: (timeslots - window + 1))) {
+      if(!is.null(save)) {
+        jpeg(file = paste(save,"Image ",i,".jpg"))
+      }
+      myTimeImage(coord, valMat[,(i:(i + window - 1))], min, max, 
+                  title = paste("Mapping values, hours ",i," to ",i+window-1))
+      
+      
+      if(!is.null(save)) {
+        dev.off()
+      }
+    }
+  }
+  else {
+    
+    for(i in (0:(floor(timeslots / window) - 1)) ) {
+      if(!is.null(save)) {
+        jpeg(file = paste(save,"Image ",i+1,".jpg"))
+      }
+      myTimeImage(coord, valMat[,((i*window + 1):( (i + 1)*window))], min, max, 
+                  title = paste("Mapping values, hours ",(i*window + 1)," to ",(i + 1)*window))
+      if(!is.null(save)) {
+        dev.off()
+      }
+    }
+    
+  }
+  
+  
+}
+
+map2color<-function(x,pal,limits=NULL){
+  if(is.null(limits)) limits=range(x)
+  pal[findInterval(x,seq(limits[1],limits[2],length.out=length(pal)+1), all.inside=TRUE)]
+}
+
+
+# ----- Define a function for plotting a matrix ----- #
+#from phaget4.org
+myImagePlot <- function(x, ...){
+  min <- min(x)
+  max <- max(x)
+  yLabels <- rownames(x)
+  xLabels <- colnames(x)
+  title <-c()
+  # check for additional function arguments
+  if( length(list(...)) ){
+    Lst <- list(...)
+    if( !is.null(Lst$zlim) ){
+      min <- Lst$zlim[1]
+      max <- Lst$zlim[2]
+    }
+    if( !is.null(Lst$yLabels) ){
+      yLabels <- c(Lst$yLabels)
+    }
+    if( !is.null(Lst$xLabels) ){
+      xLabels <- c(Lst$xLabels)
+    }
+    if( !is.null(Lst$title) ){
+      title <- Lst$title
+    }
+  }
+  # check for null values
+  if( is.null(xLabels) ){
+    xLabels <- c(1:ncol(x))
+  }
+  if( is.null(yLabels) ){
+    yLabels <- c(1:nrow(x))
+  }
+  
+  layout(matrix(data=c(1,2), nrow=1, ncol=2), widths=c(4,1), heights=c(1,1))
+  
+  # Red and green range from 0 to 1 while Blue ranges from 1 to 0
+  ColorRamp <- rgb( seq(0,1,length=256),  # Red
+                    seq(0,1,length=256),  # Green
+                    seq(1,0,length=256))  # Blue
+  ColorLevels <- seq(min, max, length=length(ColorRamp))
+  
+  # Reverse Y axis
+  reverse <- nrow(x) : 1
+  yLabels <- yLabels[reverse]
+  x <- x[reverse,]
+  
+  # Data Map
+  par(mar = c(3,5,2.5,2))
+  image(1:length(xLabels), 1:length(yLabels), t(x), col=ColorRamp, xlab="",
+        ylab="", axes=FALSE, zlim=c(min,max))
+  if( !is.null(title) ){
+    title(main=title)
+  }
+  axis(BELOW<-1, at=1:length(xLabels), labels=xLabels, cex.axis=0.7)
+  axis(LEFT <-2, at=1:length(yLabels), labels=yLabels, las= HORIZONTAL<-1,
+       cex.axis=0.7)
+  
+  # Color Scale
+  par(mar = c(3,2.5,2.5,2))
+  image(1, ColorLevels,
+        matrix(data=ColorLevels, ncol=length(ColorLevels),nrow=1),
+        col=ColorRamp,
+        xlab="",ylab="",
+        xaxt="n")
+  
+  layout(1)
+}
+# ----- END plot function ----- #
+
+
+
+densityPlot <- function(data, period = NULL, start = 1) {
+  
+  if(is.null(period)) {
+    vec <- as.numeric(data)
+    
+  }
+  else {
+    vec <- as.numeric(data[seq(start, length(data), period)])
+    
+  }
+  
+  plot(density(vec, na.rm = T), main = paste("Periodicity ", period, " slot ",start))
+  
+}
+
+
+
+
+
+
+
+
+
+###### Cluster validation ###############
+
 anomaly_cluster.distance <- function(anomaly_collection) {
   
   library(dtw)
@@ -1839,6 +3008,16 @@ anomaly_cluster.show <- function(clust, samples, clk = NULL, numb = NULL) {
   
   par(old.par)
 }
+
+
+
+
+
+
+
+
+###################### Motif Forecast #########
+
 
 anomaly_window_search <- function(data, anomaly_times, min_window) {
   
@@ -2214,861 +3393,8 @@ motif_anomaly_discovery <- function (training_set, anomaly_set, n, offset = 1, m
   
 }
 
-similarity_check <- function(prev_priority_own, prev_priority_neigh) {
-  
-  discount <- 0.6
-  
-  dissimilar <- 0
-  max_dissimilarity <- 0
-  
-  for(mem in (1:length(prev_priority_own))) {
-    dissimilar <- dissimilar + abs(prev_priority_own[mem] - prev_priority_neigh[mem]) *discount ^(mem - 1)
-    max_dissimilarity <- max_dissimilarity + 1 *discount ^(mem - 1)
-  }
-  
-  return(1 - (dissimilar / max_dissimilarity))
-  
-}
 
-
-cellDataPlotter <- function(cellData, singleNode = TRUE) {
-  
-  kpi_number <- length(cellData)
-  node_number <- nrow(cellData[[1]])
-  
-  if(singleNode == FALSE) {
-    
-    old.par <- par(mfrow = c(node_number, kpi_number), mai = c(0.2,0.3,0.2,0.3), lab = c(24, 3, 7))
-    
-  }
-  
-  for(node in 1:node_number) {
-    
-    if(singleNode == TRUE) {
-      
-      old.par <- par(mfrow = c(kpi_number, 1), mai = c(0.5,0.7,0.5,0.5), lab = c(24, 3, 7))
-      
-    }
-    
-    
-    for(kpi in 1:kpi_number) {
-      
-      plot(cellData[[kpi]][node,], main = paste("Node ",node,", kpi ",kpi), type = "o")
-      
-    }
-    
-    if(singleNode == TRUE) {
-      
-      par(old.par)
-      
-    }
-    
-  }
-  
-  if(singleNode == FALSE) {
-    
-    par(old.par)
-    
-  }
-  
-}
-
-updateSeasonality <- function(node_seasonality, curr_values, curr_period, curr_status, noSeasonPresent = FALSE) {
-  
-  cellUpdateRateOK <- 0.7
-  cellUpdateRateOUT <- 0.3
-  
-  cellUpdateRate <- 0
-  
-  if(noSeasonPresent == TRUE) {
-    
-    node_seasonality[,curr_period] <- curr_values
-    
-  }
-  else {
-    
-    if(curr_status == "OK") {
-      
-      cellUpdateRate <- cellUpdateRateOK
-      
-    }
-    else if(curr_status == "Anomaly") {
-      
-      cellUpdateRate <- cellUpdateRateOUT
-      
-    }
-    else {
-      #default
-      cellUpdateRate <- cellUpdateRateOK
-    }
-    
-    node_seasonality[,curr_period] <- ((1 - cellUpdateRate) * node_seasonality[,curr_period]) + (cellUpdateRate * curr_values)
-    
-  }
-  
-  return(node_seasonality)
-  
-  
-}
-
-
-fastGeneralFisherScan <- function(priorities, anomThreshold = 0.95) {
-  
-  
-  #order priorities
-  prior_order <- sort(priorities, decreasing = TRUE,index.return = T)$ix
-  
-  subset <- NULL
-  Fun <- rep( 0  , length(prior_order))
-  
-  #in order, calculate F(S)
-  for (size in c(1:length(prior_order))) {
-    
-    nodes <- prior_order[1:size]
-    
-    Fun[size] <- fisherCombinedPriority(1 - priorities[nodes])
-    
-    #Fun[size:length(Fun)] <- Fun[size:length(Fun)] - (2 * log(1 - priorities[node]))
-    
-  }
-  
-  string <- NULL
-  
-  final_scores <- Fun
-  
-  #Best result
-  
-  bestSize <- 0
-  bestScore <- 0
-  
-  for(size in c(1:length(prior_order))) {
-    if(final_scores[size] >= bestScore) {
-      bestScore <- final_scores[size]
-      bestSize <- size  
-    }
-  }
-  for(size in c(1:bestSize)) {
-    string <- paste(string," ", prior_order[size])
-  }
-  
-  if(bestScore > anomThreshold) {
-    #print(paste("Set ",size,", neighbours (",string,"), score ",bestScore))
-  }
-  
-  return(list(vote = bestScore,
-              nodes = prior_order[1:bestSize]))
-  
-}
-
-fastGeneralWeightedFisherScan <- function(priorities, weights, anomThreshold = 0.95, base_priority = 0.68) {
-  
-  #transform priorities according to their weight
-  for(p in (1:length(priorities))) {
-    
-    priorities[p] <- priorityWeight(priorities[p], weights[p], base_priority)
-    
-  }
-  
-  #order priorities
-  prior_order <- sort(priorities, decreasing = TRUE,index.return = T)$ix
-  
-  subset <- NULL
-  Fun <- rep( 0  , length(prior_order))
-  
-  #in order, calculate F(S)
-  for (size in c(1:length(prior_order))) {
-    
-    nodes <- prior_order[1:size]
-    
-    Fun[size] <- fisherCombinedPriority(1 - priorities[nodes])
-    
-    #Fun[size:length(Fun)] <- Fun[size:length(Fun)] - (2 * log(1 - priorities[node]))
-    
-  }
-  
-  string <- NULL
-  
-  final_scores <- Fun
-  
-  #Best result
-  
-  bestSize <- 0
-  bestScore <- 0
-  
-  #do not report clusters of less than 3 nodes
-  minSize <- 3
-  
-  for(size in c(minSize:length(prior_order))) {
-    if(final_scores[size] >= bestScore) {
-      bestScore <- final_scores[size]
-      bestSize <- size  
-    }
-  }
-  for(size in c(1:bestSize)) {
-    string <- paste(string," ", prior_order[size])
-  }
-  
-  if(bestScore > anomThreshold) {
-    #print(paste("Set ",size,", neighbours (",string,"), score ",bestScore))
-  }
-  
-  return(list(vote = bestScore,
-              nodes = prior_order[1:bestSize]))
-  
-}
-
-
-#pvector: pvalues for the univariate\multivariate case
-#returns: the priority of the combined
-priority_function <- function(pvector, alfa) {
-  
-  
-  #return the fisher combined probability -> the priority function for itself
-  #this is thanks to its chi-square distribution, the sum of two sample of which results in
-  #a chi-square distribution
-  
-  #this property allows fisher's test to satisfy the strong LTSS property
-  #it is preferable to common ltss count-based function that do not account for
-  #multiple hypotesis testing
-  return(fisherCombinedPriority(pvector))
-  
-  
-}
-
-fisher.show <- function(priorities) {
-  
-  changingp <- c(1000:0)/1000
-  res <- NULL
-  for(i in 1:length(changingp)) {
-    res <- c(res, fisherCombinedPriority(c(1 - priorities, changingp[i])))
-  }
-  sting <- paste(priorities, collapse = ", ")
-  string <- paste("Fisher curve, starting priorities", sting)
-  #plot(1 - changingp, 1 - changingp, type = "l", main = string)
-  plot(1 - changingp, res, col = "red", type = "l", main = string, ylim = c(0,1))
-  abline(h = fisherCombinedPriority(c(1 - priorities)), col = "blue")
-  
-  lineL <- 10
-  for(j in 1:length(priorities)) {
-  points((1:lineL)/1000, rep(priorities[j],lineL), col = "purple", type = "l")
-  }
-  
-}
-
-#input: the pvalues
-#Returns fisher combined test (higher = worse!) a priority
-fisherCombinedPriority <- function(pvector) {
-  
-  max_priority <- 0.99999
-  
-  #to avoid problems, pvalues = 0 are considered with small but not zero value
-  pvector[pvector < (1 - max_priority)] <- (1 - max_priority)
-  
-  #Fisher's combined probability test
-  #
-  fisher <- pchisq(-2 * (sum(log(pvector))), df = 2*length(pvector))
-  
-  return(fisher)
-  
-}
-
-#weight between 0 and 1
-#low weight will be indicated via base_priority
-# everything with higher than base_priority will be lowered to the base_priority if their weight is low
-# everything with lower than base_priority will be raised to the base_priority if their weight is low
-
-#Base priority represents the priority of a node that doesn't give me any information on whether to 
-#accept or reject the normality\anomalousness hypothesis
-priorityWeight <- function(priority, weight, base_priority) {
-  
-  pval <- 1 - priority
-  base_confidence <- 1 - base_priority
-  
-  myPower <- pwr( (pval - base_confidence), 1 / weight) + base_confidence
-  dist <- myPower - pval
-  
-  if(pval < base_confidence) {
-    wpval <- myPower - (dist * (abs(pval - base_confidence)/base_confidence)^(1/weight))
-  }
-  else {
-    wpval <- myPower - (dist * (abs(pval - base_confidence)/ (1 - base_confidence) )^(1/weight))
-    
-  }
-  
-  return(1 - wpval)
-  
-}
-
-
-#input: weights, and the pvalues
-#Returns fisher combined test (higher = worse!) a priority
-fisherWeightedCombinedPriority <- function(weights, pvector) {
-  
-  if(max(weights) > 1) {
-    weights <- weights / max(weights)
-  }
-  
-  priorities <- 1 - pvector
-  #wpriorities <- weights * priorities
-  wpriorities <- pchisq(qgamma(priorities, shape = weights / 2, scale = 2), df = 1)
-  wpvalues <- 1 - wpriorities
-  
-  #Fisher's combined probability test
-  #
-  fisher <- pchisq(-2 * (sum(log(wpvalues))), df = 2*length(pvector))
-  
-  return(fisher)
-  
-}
-
-
-#input: weights and pvalues
-#weights are normalized to sum to 1 before applying
-#Returns lancaster generalized fisher test, a priority
-lancasterGeneralizedFisher <- function(weights, pvalues) {
-  
-  weights <- weights / sum(weights)
-  
-  priorities <- 1 - pvalues
-  
-  lancaster <- pchisq( sum(qgamma(priorities, shape = weights / 2, scale = 2)),
-                       df = sum(weights))
-  
-  return(lancaster)
-  
-}
-
-testLancaster <- function() {
-  
-  lancaster_growth <- NULL
-  
-  for(i in 1:100) {
-    
-    #assume growing weights*priority
-    i <- i/100
-    
-    pi <- runif(1,0,1)
-    wi <- i / pi
-    
-    
-    
-    #thus we have wi*pi = i, therefore growing at each iteration
-    #let's check that wi*pi can be a valid priority metric (combined priority raises with it - convexity)
-    
-    lancaster_growth <- c(lancaster_growth,
-                          lancasterGeneralizedFisher(c(0.5, wi), c(0.7, pi)))
-    
-    
-  }
-  
-  
-  return(lancaster_growth)
-  
-}
-
-testLancaster2 <- function() {
-  
-  lancaster_growth <- NULL
-  gamma_growth <- NULL
-  
-  for(i in 1:100) {
-    
-    #generate random weight and pvalues
-    
-    wi <- runif(1,0,1)
-    pi <- runif(1,0,1)
-    
-    #generate quality (G(s))
-    gamma_growth <- c(gamma_growth, qgamma(1 - pi, shape = wi / 2, scale = 2))
-    
-    lancaster_growth <- c(lancaster_growth,
-                          lancasterGeneralizedFisher(c(0.5, wi), c(0.7, pi)))
-    
-    
-  }
-  
-  #let's check if ordering lancaster_growth according to gamma_growth yields results
-  
-  sortorder <- sort.int(gamma_growth, index.return = T)$ix
-  lancaster_ord <- lancaster_growth[sortorder]
-  
-  return(lancaster_ord)
-  
-}
-
-testWeightedFisher <- function() {
-  
-  fisher_growth <- NULL
-  
-  for(i in 1:100) {
-    
-    #assume growing weights*priority
-    i <- i/100
-    
-    pi <- runif(1,0,1)
-    wi <- i / pi
-    
-    #thus we have wi*pi = i, therefore growing at each iteration
-    #let's check that wi*pi can be a valid priority metric (combined priority raises with it - convexity)
-    
-    fisher_growth <- c(fisher_growth,
-                       fisherCombinedPriority(c(0.6*0.8, 1 - wi*pi)))
-    
-    
-    
-  }
-  
-  return(fisher_growth)
-  
-}
-
-testWeightedFisher2 <- function() {
-  
-  fisher_growth <- NULL
-  weighted_growth <- NULL
-  
-  for(i in 1:1000) {
-    
-    #Calculate random weights and pvalues
-    wi <- runif(1,0,1)
-    pi <- runif(1,0,1)
-    
-    #Calculate priority from weight and pval
-    #for a confidence threshold of 0.35
-    confid <- 0.35
-    powered <-  pwr((pi - confid) , 1 / wi) + confid
-    weighted_growth <- c(weighted_growth, 1 - powered)
-    
-    fisher_growth <- c(fisher_growth,
-                       fisherCombinedPriority(c(0.8, powered)))
-    
-  }
-  
-  #let's check if ordering lancaster_growth according to gamma_growth yields results
-  
-  sortorder <- sort.int(weighted_growth, index.return = T)$ix
-  fisher_ord <- fisher_growth[sortorder]
-  
-  
-  return(fisher_ord)
-  
-}
-
-#returns: the pvalue of the value given the seasonality
-#replicas: the function replicates the seasonality for a number of time to achieve better regression model (danger of overfitting!)
-#max replicas : 5
-featureSeasonFitness <- function(feat_cell_seasonality, feat_curr_value, curr_period, replicas = 2, fit = 6, visual = FALSE) {
-  
-  maxReplicas <- 5
-  
-  #shift cell seasonality to have last slot the previous value
-  
-  #feat_cell_seasonality = [1,2,3, ... ,23,24]
-  #curr_period = 8
-  # ---> previous_seasonality <- [8,9,10, ... ,6,7]
-  
-  previous_seasonality <- shiftLeft(feat_cell_seasonality, num = (curr_period - 1))
-  
-  library(forecast)
-  
-  replicas <- min(replicas, maxReplicas)
-  
-  if(abs(max(previous_seasonality) - min(previous_seasonality)) < 0.0001) {
-    #nothing to predict, all equal
-    
-    fcasted <- max(previous_seasonality)
-    sdev <- 0.0001
-    
-  }
-  else {
-    #fit an arima to the historical data
-    #aa <- auto.arima(rep(previous_seasonality, replicas))
-    aa <- Arima(rep(previous_seasonality, replicas), c(3,0,0), c(0,1,1), method = "CSS")
-    
-    ff <- forecast(aa, h = 1, level = c(68.27, 95.45))
-    
-    #find z-score (number of standard deviation of distance from forecast value)
-    fcasted <- ff$mean[1]
-    sdev <- abs(ff$lower[1] - ff$lower[2])
-    
-  }
-  zscore <- (feat_curr_value - fcasted) / sdev
-  
-  #  pval <- 2*pnorm(-abs(zscore))
-  pval <- pnorm(zscore)
-  
-  # (1 - pval) = minimum prediction interval threshold for given value, value within 1-pval most probable
-  # pval = value is predicted within the pval less probable outcom
-  
-  if(visual == TRUE) {
-    
-    old.par <- par(mfrow = c(2,1), mai = c(0.6,1,0.5,0.5))
-    
-    plot(c(previous_seasonality, NA), type ="o", col ="blue", main = "Seasonal curve", pch = 21)
-    points(length(previous_seasonality) + 1, feat_curr_value, col = "red")
-    
-    plot(ff, main = "Forecast")
-    points(length(previous_seasonality) * replicas + 1, feat_curr_value, col = "red")
-    
-    par(old.par)
-    
-  }
-  
-  return (pval)  
-  
-}
-
-#returns: the pvalue of the value given the seasonality
-featureLastValuesFitness <- function(feat_cell_past_values, feat_curr_value, visual = FALSE) {
-  
-  #assumes last value in feat_cell_past_values is at the end
-  
-  library(forecast)
-  
-  if(abs(max(feat_cell_past_values) - min(feat_cell_past_values)) < 0.0001) {
-    #nothing to predict, all equal
-    
-    fcasted <- max(feat_cell_past_values)
-    sdev <- 0.0001
-    
-  }
-  else {
-    
-    
-    #fit an arima to the historical data
-    #aa <- auto.arima(feat_cell_past_values)
-    
-    #aa <- Arima(feat_cell_past_values, c(6,0,1))
-    aa <- Arima(feat_cell_past_values, c(0,1,0), c(0,1,0), method = "CSS-ML")
-    
-    ff <- forecast(aa, h = 1, level = c(68.27, 95.45))
-    
-    #find z-score (number of standard deviation of distance from forecast value)
-    fcasted <- ff$mean[1]
-    sdev <- abs(ff$lower[1] - ff$lower[2])
-    
-  }
-  
-  zscore <- (feat_curr_value - fcasted) / sdev
-  
-  #  pval <- 2*pnorm(-abs(zscore))
-  pval <- pnorm(zscore)
-  
-  
-  # (1 - pval) = minimum prediction interval threshold for given value, value within 1-pval most probable
-  # pval = value is predicted within the pval less probable outcome
-  
-  if(visual == TRUE) {
-    
-    old.par <- par(mfrow = c(2,1), mai = c(0.6,1,0.5,0.5))
-    
-    plot(c(feat_cell_past_values, NA), type ="o", col ="blue", main = "Past curve")
-    points(length(feat_cell_past_values) + 1, feat_curr_value, col = "red")
-    
-    plot(ff, main = "Forecast")
-    points(length(feat_cell_past_values) + 1, feat_curr_value, col = "red")
-    
-    par(old.par)
-    
-  }
-  
-  return (pval)  
-  
-}
-
-
-#returns: the pvalue of the value given the historical mean and sd for the period
-featureHistoryFitness <- function(feat_historical_period_mean, feat_historical_period_sd, feat_curr_value, visual = FALSE) {
-  
-  
-  #find z-score (number of standard deviation of distance from historical value)
-  zscore <- (feat_curr_value - feat_historical_period_mean) / feat_historical_period_sd
-  
-  #  pval <- 2*pnorm(-abs(zscore))
-  pval <- pnorm(zscore)
-  
-  
-  # (1 - pval) = minimum prediction interval threshold for given value, value within 1-pval most probable
-  # pval = value is predicted within the pval less probable outcom
-  
-  if(visual == TRUE) {
-    
-    yminlim <- min(feat_historical_period_mean - (3 * feat_historical_period_sd),
-                   feat_curr_value) - 0.5
-    ymaxlim <- max(feat_historical_period_mean + (3 * feat_historical_period_sd),
-                   feat_curr_value) + 0.5
-    
-    plot(1, type ="n", main = "Historical data", ylim = c(yminlim, ymaxlim))
-    points(feat_curr_value, col = "black", pch = 16)
-    
-    abline(h = feat_historical_period_mean, col = "green")
-    text(adj = c(0, NA), x = 0.6, y = feat_historical_period_mean + 0.15, label = "Historical Mean", col = "green")
-    
-    abline(h = feat_historical_period_mean + feat_historical_period_sd, col = "blue")
-    text(adj = c(0, NA), x = 0.6, y = feat_historical_period_mean + feat_historical_period_sd + 0.15, label = "+1 sd", col = "blue")
-    abline(h = feat_historical_period_mean - feat_historical_period_sd, col = "blue")
-    text(adj = c(0, NA), x = 0.6, y = feat_historical_period_mean - feat_historical_period_sd + 0.15, label = "-1 sd", col = "blue")
-    
-    abline(h = feat_historical_period_mean + 2 * feat_historical_period_sd, col = "purple")
-    text(adj = c(0, NA), x = 0.6, y = feat_historical_period_mean + 2 * feat_historical_period_sd + 0.15, label = "+2 sd", col = "purple")
-    abline(h = feat_historical_period_mean - 2 *feat_historical_period_sd, col = "purple")
-    text(adj = c(0, NA), x = 0.6, y = feat_historical_period_mean - 2 * feat_historical_period_sd + 0.15, label = "-2 sd", col = "purple")
-    
-    abline(h = feat_historical_period_mean + 3 * feat_historical_period_sd, col = "red")
-    text(adj = c(0, NA), x = 0.6, y = feat_historical_period_mean + 3 * feat_historical_period_sd + 0.15, label = "+3 sd", col = "red")
-    abline(h = feat_historical_period_mean - 3 *feat_historical_period_sd, col = "red")
-    text(adj = c(0, NA), x = 0.6, y = feat_historical_period_mean - 3 * feat_historical_period_sd + 0.15, label = "-3 sd", col = "red")
-    
-  }
-  
-  return (pval)  
-  
-}
-
-
-featureDistanceThresholdPVal <- function(feat_cell_season_val, feat_curr_value, distance_threshold, threshold_confidence, visual = FALSE) {
-  
-  #threshold_confidence indicates it is expected that value falls
-  #within distance_threshold with that confidence
-  
-  residual <- feat_curr_value - feat_cell_season_val
-  
-  #given confidence of 95.45%, distance_treshold is 2 sd
-  #given confidence of x, distance_treshold is zscore(1 - x) * sd?
-  
-  #  sDev <- distance_threshold / qnorm(1 - (1 - threshold_confidence)/2 )
-  sDev <- distance_threshold / qnorm(1 - (1 - threshold_confidence))
-  
-  if(sDev == 0) {
-    if(residual > 0) {
-      zscore <- 5
-    }
-    else if(residual == 0) {
-      zscore <- 0
-    }
-    else if(residual < 0) {
-      zscore <- -5
-    }
-  }
-  else{
-    zscore <- residual / sDev
-  }
-  
-  #  pval <- 2*pnorm(-abs(zscore))
-  pval <- pnorm(zscore)
-  
-  
-  if(visual == TRUE) {
-    
-    
-    yminlim <- min(feat_cell_season_val - distance_threshold,
-                   feat_curr_value) - 0.5
-    ymaxlim <- max(feat_cell_season_val + distance_threshold,
-                   feat_curr_value) + 0.5
-    
-    plot(1, type ="n", main = "Distance threshold", ylim = c(yminlim, ymaxlim))
-    rect(par("usr")[1], feat_cell_season_val - distance_threshold, 
-         par("usr")[2], feat_cell_season_val + distance_threshold, col = "whitesmoke")
-    points(feat_cell_season_val, col = "blue", pch = 21)
-    points(feat_curr_value, col = "black", pch = 16)
-    
-    abline(h = feat_cell_season_val + distance_threshold, col = "red")
-    abline(h = feat_cell_season_val - distance_threshold, col = "red")
-    
-  }
-  
-  
-  return(pval)
-  
-}
-
-featureDiffPVal <- function(season_window, measure_window,
-                            threshold, threshold_confidence, 
-                            lag, difference,
-                            visual = FALSE) {
-  
-  #threshold_confidence indicates it is expected that value falls
-  #within distance_threshold with that confidence
-  
-  season_residual <- measure_window - season_window
-  
-  myDiff <- diff(season_residual, lag = lag, difference)
-  residual <- myDiff[length(myDiff)]
-  
-  #given confidence of 95.45%, distance_treshold is 2 sd
-  #given confidence of x, distance_treshold is zscore(1 - x) * sd?
-  
-  # sDev <- descent_threshold / qnorm(1 - (1 - threshold_confidence)/2 )
-  sDev <- threshold / qnorm(threshold_confidence)  
-  
-  if(sDev == 0) {
-    if(residual > 0) {
-      zscore <- 5
-    }
-    else if(residual == 0) {
-      zscore <- 0
-    }
-    else if(residual < 0) {
-      zscore <- -5
-    }
-  }
-  else{
-    zscore <- residual / sDev
-  }
-  pval <- pnorm(zscore)
-  
-#   if(visual == TRUE) {
-#     
-#     old.par <- par(mfrow = c(2,1), mai = c(0.6,1,0.5,0.5))
-#     
-#     yminlim <- min(feat_cell_season_val, feat_prev_cell_season_val,
-#                    feat_curr_value, feat_prev_value) - 0.5
-#     ymaxlim <- max(feat_cell_season_val, feat_prev_cell_season_val,
-#                    feat_curr_value, feat_prev_value) + 0.5
-#     
-#     plot(1, type ="n", main = "Trends", xlim = c(-0.5, +1.5), ylim = c(yminlim, ymaxlim))
-#     points(c(0, 1), c(feat_prev_cell_season_val, feat_cell_season_val), col = "blue", pch = 21)
-#     lines(c(0, 1), c(feat_prev_cell_season_val, feat_cell_season_val), col = "blue")
-#     points(c(0, 1), c(feat_prev_value, feat_curr_value), col = "black", pch = 16)
-#     lines(c(0, 1), c(feat_prev_value, feat_curr_value), col = "black")
-#     
-#     plot(1, type ="n", main ="Threshold", xlim = c(-1, 1), ylim = c(-1, 1))
-#     abline(a = 0, b = (feat_cell_season_val - feat_prev_cell_season_val), col = "blue")
-#     abline(a = 0, b = (feat_curr_value - feat_prev_value), col = "black")
-#     abline(a = 0, b = (feat_cell_season_val - feat_prev_cell_season_val) + descent_threshold, col = "red")
-#     abline(a = 0, b = (feat_cell_season_val - feat_prev_cell_season_val) - descent_threshold, col = "red")   
-#     #further sd thresholds
-#     abline(a = 0, b = (feat_cell_season_val - feat_prev_cell_season_val) + 2 * descent_threshold, col = "purple")
-#     abline(a = 0, b = (feat_cell_season_val - feat_prev_cell_season_val) - 2 * descent_threshold, col = "purple")    
-#     
-#     
-#     par(old.par)
-#     
-#   }
-  
-  
-  return(pval)
-  
-  
-}
-
-featureTrendThresholdPVal <- function(feat_cell_season_val, feat_prev_cell_season_val,
-                                      feat_curr_value, feat_prev_value, 
-                                      descent_threshold, 
-                                      threshold_confidence,
-                                      visual = FALSE) {
-  
-  #threshold_confidence indicates it is expected that value falls
-  #within distance_threshold with that confidence
-  
-  curr_residual <- feat_curr_value - feat_prev_value
-  season_residual <- feat_cell_season_val - feat_prev_cell_season_val
-  
-  residual <- curr_residual - season_residual
-  
-  #given confidence of 95.45%, distance_treshold is 2 sd
-  #given confidence of x, distance_treshold is zscore(1 - x) * sd?
-  
-  # sDev <- descent_threshold / qnorm(1 - (1 - threshold_confidence)/2 )
-  sDev <- descent_threshold / qnorm(threshold_confidence)  
-  
-  if(sDev == 0) {
-    if(residual > 0) {
-      zscore <- 5
-    }
-    else if(residual == 0) {
-      zscore <- 0
-    }
-    else if(residual < 0) {
-      zscore <- -5
-    }
-  }
-  else{
-    zscore <- residual / sDev
-  }
-  pval <- pnorm(zscore)
-  
-  if(visual == TRUE) {
-    
-    old.par <- par(mfrow = c(2,1), mai = c(0.6,1,0.5,0.5))
-    
-    yminlim <- min(feat_cell_season_val, feat_prev_cell_season_val,
-                   feat_curr_value, feat_prev_value) - 0.5
-    ymaxlim <- max(feat_cell_season_val, feat_prev_cell_season_val,
-                   feat_curr_value, feat_prev_value) + 0.5
-    
-    plot(1, type ="n", main = "Trends", xlim = c(-0.5, +1.5), ylim = c(yminlim, ymaxlim))
-    points(c(0, 1), c(feat_prev_cell_season_val, feat_cell_season_val), col = "blue", pch = 21)
-    lines(c(0, 1), c(feat_prev_cell_season_val, feat_cell_season_val), col = "blue")
-    points(c(0, 1), c(feat_prev_value, feat_curr_value), col = "black", pch = 16)
-    lines(c(0, 1), c(feat_prev_value, feat_curr_value), col = "black")
-    
-    plot(1, type ="n", main ="Threshold", xlim = c(-1, 1), ylim = c(-1, 1))
-    abline(a = 0, b = (feat_cell_season_val - feat_prev_cell_season_val), col = "blue")
-    abline(a = 0, b = (feat_curr_value - feat_prev_value), col = "black")
-    abline(a = 0, b = (feat_cell_season_val - feat_prev_cell_season_val) + descent_threshold, col = "red")
-    abline(a = 0, b = (feat_cell_season_val - feat_prev_cell_season_val) - descent_threshold, col = "red")   
-    #further sd thresholds
-    abline(a = 0, b = (feat_cell_season_val - feat_prev_cell_season_val) + 2 * descent_threshold, col = "purple")
-    abline(a = 0, b = (feat_cell_season_val - feat_prev_cell_season_val) - 2 * descent_threshold, col = "purple")    
-    
-    
-    par(old.par)
-    
-  }
-  
-  
-  return(pval)
-  
-}
-
-
-######################################## Shift Functions #######################
-
-
-#shift cells of a vector one position to the right, with wrapping
-#shiftRight([1,2,3,4,5], num = 2) --> [4,5,1,2,3]
-shiftRight <- function(vec, num = 1) {
-  
-  vec <- c(vec[(length(vec) - num + 1):length(vec)],vec[1:(length(vec)-num)])
-  return(vec)
-  
-}
-
-#shift cells of a vector num position to the left, with wrapping
-#shiftLeft([1,2,3,4,5], num = 2) --> [3,4,5,1,2]
-#num must be < length(vec)
-
-shiftLeft <- function(vec, num = 1) {
-  
-  if(is.null(vec) || length(vec) < 1) {
-    return(NULL)
-  }
-  
-  while(num >= length(vec)) {
-    num <- num - length(vec)
-  }
-  
-  if(num > 0) {
-    vec <- c(vec[(1 + num) : length(vec)],vec[1:num])
-  }
-  
-  return(vec)
-  
-}
-
-shiftRightMatrix <- function(mat, num = 1) {
-  
-  m1 <- matrix(mat[,(ncol(mat) - num + 1):ncol(mat)], ncol = num)
-  m2 <- matrix(mat[,1:(ncol(mat)-num)], ncol = ncol(mat) - num)
-  
-  mat <- cbind(m1,m2)
-  return(mat)
-  
-}
-
-
-###################################### Linked List #############################
+###################### Linked List Forecast #############################
 
 
 compareHistory <- function(vec1, vec2) {
@@ -4009,7 +4335,7 @@ buildStateEntrySeason  <- function(node, prev_state, prev_neigh_value, state_mem
 }
 
 
-########################################## Markov Previsions ###################################
+###################### Markov Previsions ###################################
 
 #returns a list containing next step_numb steps with attached probability according to the cell historical data given
 #MST = Markov State Transition (extended with eventual history)
@@ -4381,144 +4707,7 @@ sameHistory <- function(h1, h2, exact = TRUE) {
 }
 
 
-############################################# Sinusoids ##############################
-
-#build data sets ( sinusoids ) of various kinds for testing of noisy and single anomaly detection
-
-createTestData1 <- function(period = 24, period_number = 7) {
-  
-  #normal sinusoid with chosen period, for a certain period_number, with lowest value 0.5, highest 2.5 
-  sinusoid1 <- sin(pi*(0:((period*period_number) - 1))/(period/2)) + 1.5
-  
-  #robustness to noise
-  
-  #sinusoid with low noise
-  sinusoid2 <- sinusoid1 + runif(period*period_number, -0.3, 0.3)
-  #sinusoid with medium noise
-  sinusoid3 <- sinusoid1 + runif(period*period_number, -0.4, 0.4)
-  #sinusoid with high noise
-  sinusoid4 <- sinusoid1 + runif(period*period_number, -0.5, 0.8)
-  
-  
-  #single anomaly detection
-  
-  #single point, low noise, high peak of data, small anomaly score
-  sinusoid5 <- sinusoid1 + runif(period*period_number, -0.3, 0.3)
-  sinusoid5[32] <- sinusoid5[32] * c(0.6)
-  #single point, low noise, high peak of data, high anomaly score
-  sinusoid6 <- sinusoid1 + runif(period*period_number, -0.3, 0.3)
-  sinusoid6[54] <- sinusoid6[54] * c(0.3)
-  
-  #single point, low noise, rising slope of data, small anomaly score
-  sinusoid11 <- sinusoid1 + runif(period*period_number, -0.3, 0.3)
-  sinusoid11[51] <- sinusoid11[51] * c(0.6)
-  #single point, low noise, rising slope of data, high anomaly score
-  sinusoid12 <- sinusoid1 + runif(period*period_number, -0.3, 0.3)
-  sinusoid12[75] <- sinusoid12[75] * c(0.3)
-  
-  #single point, low noise, downward slope of data, small anomaly score
-  sinusoid13 <- sinusoid1 + runif(period*period_number, -0.3, 0.3)
-  sinusoid13[83] <- sinusoid13[83] * c(0.6)
-  #single point, low noise, downward slope of data, high anomaly score
-  sinusoid14 <- sinusoid1 + runif(period*period_number, -0.3, 0.3)
-  sinusoid14[107] <- sinusoid14[107] * c(0.3)
-  
-  #single point, low noise, low valley of data, small anomaly score
-  sinusoid7 <- sinusoid1 + runif(period*period_number, -0.3, 0.3)
-  sinusoid7[87] <- sinusoid7[87] * c(0.6)
-  #single point, low noise, low valley of data, high anomaly score
-  sinusoid8 <- sinusoid1 + runif(period*period_number, -0.3, 0.3)
-  sinusoid8[113] <- sinusoid8[113] * c(0.3)
-  
-  
-  #single point, high noise, high peak of data, high anomaly score
-  sinusoid9 <- sinusoid1 + runif(period*period_number, -0.5, 0.5)
-  sinusoid9[103] <- sinusoid9[103] * c(0.5)
-  #single point, high noise, low valley of data, high anomaly score
-  sinusoid10 <- sinusoid1 + runif(period*period_number, -0.5, 0.5)
-  sinusoid10[135] <- sinusoid10[135] * c(0.5)
-  
-  
-  clust <- rbind(sinusoid1,
-                 sinusoid2,
-                 sinusoid3,
-                 sinusoid4,
-                 sinusoid5,
-                 sinusoid6,
-                 sinusoid7,
-                 sinusoid8,
-                 sinusoid9,
-                 sinusoid10,
-                 sinusoid11,
-                 sinusoid12,
-                 sinusoid13,
-                 sinusoid14)
-  
-  return(clust)
-  
-  
-}
-
-
-createTestData2 <- function(period = 24, period_number = 7) {
-  
-  
-  #normal sinusoid with chosen period, for a certain period_number, with lowest value 0.5, highest 2.5 
-  sinusoid1 <- sin(pi*(0:((period*period_number) - 1))/(period/2)) + 1.5
-  
-  
-  #anomaly length 5, fast down, fast up
-  sinusoid15 <- sinusoid1 + runif(period*period_number, -0.3, 0.3)
-  sinusoid15[83:87] <- sinusoid15[83:87]*c(0.4, 0.2, 0.2, 0.2, 0.8)
-  #anomaly length 5, fast down, slow up
-  sinusoid16 <- sinusoid1 + runif(period*period_number, -0.3, 0.3)
-  sinusoid16[83:87] <- sinusoid16[83:87]*c(0.4, 0.55, 0.65, 0.7, 0.85)
-  #anomaly length 5, slow down, fast up
-  sinusoid17 <- sinusoid1 + runif(period*period_number, -0.3, 0.3)
-  sinusoid17[83:87] <- sinusoid17[83:87]*c(0.8, 0.65, 0.5, 0.3, 0.8)
-  #anomaly length 5, slow down, slow up
-  sinusoid18 <- sinusoid1 + runif(period*period_number, -0.3, 0.3)
-  sinusoid18[83:87] <- sinusoid18[83:87]*c(0.75, 0.6, 0.4, 0.55, 0.7)
-  
-  clust <- rbind(sinusoid1,
-                 sinusoid15,
-                 sinusoid16,
-                 sinusoid17,
-                 sinusoid18)
-  
-  return(clust)
-  
-  
-  
-}
-
-
-#calculates probability that a single value is a good fit to the distribution assumed 
-#from the rest of the nodes
-
-fitnessCheck <- function(historic, newValue, confidence, plot = FALSE) {
-  
-  library(forecast)
-  
-  #fit an arima to the historical data
-  aa <- auto.arima(historic)
-  ff <- forecast(aa, h = 1, level = confidence)
-  
-  if(plot == TRUE) {
-    plot(ff)
-    lines(rep(newValue, length(historic) + 1), col = "red")
-  }
-  if(newValue >= ff$lower[1] && newValue <= ff$upper[1]) {
-    return(TRUE)
-  }
-  else {
-    return(FALSE)
-  }
-  
-}
-
-
-################################################## Fast Subset Scan ###################################
+###################### Fast Subset Scan ###################################
 
 testFSS <- function() {
   
@@ -4824,7 +5013,7 @@ powerset <- function(s){
 }
 
 
-####### K-MEANS #########
+###################### K-MEANS #########
 
 
 #myData: a matrix, each row corresponding to a window of a different time series
@@ -4939,7 +5128,8 @@ testBest <- function(myData, window) {
   return(result)
 }
 
-############################### Weighting Fun ############
+
+###################### Weighting Fun ############
 
 
 pgam <- function(shape, scaleFactor) {
@@ -5063,7 +5253,7 @@ logit <- function(confid, k) {
 }
 
 
-################################## PSF + Motifs #############
+###################### PSF + Motifs #############
 
 
 #Single time series (or multi? in that case on which subset of neighbors, and how to incorporate weights?)
@@ -5474,7 +5664,147 @@ motif_discovery <- function(training_set, n, offset = 1, max_window = 24, min_k 
   
 }
 
-######## TEST SET GENERATION ###########
+
+
+
+############## Sinusoids ##############################
+
+#build data sets ( sinusoids ) of various kinds for testing of noisy and single anomaly detection
+
+createTestData1 <- function(period = 24, period_number = 7) {
+  
+  #normal sinusoid with chosen period, for a certain period_number, with lowest value 0.5, highest 2.5 
+  sinusoid1 <- sin(pi*(0:((period*period_number) - 1))/(period/2)) + 1.5
+  
+  #robustness to noise
+  
+  #sinusoid with low noise
+  sinusoid2 <- sinusoid1 + runif(period*period_number, -0.3, 0.3)
+  #sinusoid with medium noise
+  sinusoid3 <- sinusoid1 + runif(period*period_number, -0.4, 0.4)
+  #sinusoid with high noise
+  sinusoid4 <- sinusoid1 + runif(period*period_number, -0.5, 0.8)
+  
+  
+  #single anomaly detection
+  
+  #single point, low noise, high peak of data, small anomaly score
+  sinusoid5 <- sinusoid1 + runif(period*period_number, -0.3, 0.3)
+  sinusoid5[32] <- sinusoid5[32] * c(0.6)
+  #single point, low noise, high peak of data, high anomaly score
+  sinusoid6 <- sinusoid1 + runif(period*period_number, -0.3, 0.3)
+  sinusoid6[54] <- sinusoid6[54] * c(0.3)
+  
+  #single point, low noise, rising slope of data, small anomaly score
+  sinusoid11 <- sinusoid1 + runif(period*period_number, -0.3, 0.3)
+  sinusoid11[51] <- sinusoid11[51] * c(0.6)
+  #single point, low noise, rising slope of data, high anomaly score
+  sinusoid12 <- sinusoid1 + runif(period*period_number, -0.3, 0.3)
+  sinusoid12[75] <- sinusoid12[75] * c(0.3)
+  
+  #single point, low noise, downward slope of data, small anomaly score
+  sinusoid13 <- sinusoid1 + runif(period*period_number, -0.3, 0.3)
+  sinusoid13[83] <- sinusoid13[83] * c(0.6)
+  #single point, low noise, downward slope of data, high anomaly score
+  sinusoid14 <- sinusoid1 + runif(period*period_number, -0.3, 0.3)
+  sinusoid14[107] <- sinusoid14[107] * c(0.3)
+  
+  #single point, low noise, low valley of data, small anomaly score
+  sinusoid7 <- sinusoid1 + runif(period*period_number, -0.3, 0.3)
+  sinusoid7[87] <- sinusoid7[87] * c(0.6)
+  #single point, low noise, low valley of data, high anomaly score
+  sinusoid8 <- sinusoid1 + runif(period*period_number, -0.3, 0.3)
+  sinusoid8[113] <- sinusoid8[113] * c(0.3)
+  
+  
+  #single point, high noise, high peak of data, high anomaly score
+  sinusoid9 <- sinusoid1 + runif(period*period_number, -0.5, 0.5)
+  sinusoid9[103] <- sinusoid9[103] * c(0.5)
+  #single point, high noise, low valley of data, high anomaly score
+  sinusoid10 <- sinusoid1 + runif(period*period_number, -0.5, 0.5)
+  sinusoid10[135] <- sinusoid10[135] * c(0.5)
+  
+  
+  clust <- rbind(sinusoid1,
+                 sinusoid2,
+                 sinusoid3,
+                 sinusoid4,
+                 sinusoid5,
+                 sinusoid6,
+                 sinusoid7,
+                 sinusoid8,
+                 sinusoid9,
+                 sinusoid10,
+                 sinusoid11,
+                 sinusoid12,
+                 sinusoid13,
+                 sinusoid14)
+  
+  return(clust)
+  
+  
+}
+
+
+createTestData2 <- function(period = 24, period_number = 7) {
+  
+  
+  #normal sinusoid with chosen period, for a certain period_number, with lowest value 0.5, highest 2.5 
+  sinusoid1 <- sin(pi*(0:((period*period_number) - 1))/(period/2)) + 1.5
+  
+  
+  #anomaly length 5, fast down, fast up
+  sinusoid15 <- sinusoid1 + runif(period*period_number, -0.3, 0.3)
+  sinusoid15[83:87] <- sinusoid15[83:87]*c(0.4, 0.2, 0.2, 0.2, 0.8)
+  #anomaly length 5, fast down, slow up
+  sinusoid16 <- sinusoid1 + runif(period*period_number, -0.3, 0.3)
+  sinusoid16[83:87] <- sinusoid16[83:87]*c(0.4, 0.55, 0.65, 0.7, 0.85)
+  #anomaly length 5, slow down, fast up
+  sinusoid17 <- sinusoid1 + runif(period*period_number, -0.3, 0.3)
+  sinusoid17[83:87] <- sinusoid17[83:87]*c(0.8, 0.65, 0.5, 0.3, 0.8)
+  #anomaly length 5, slow down, slow up
+  sinusoid18 <- sinusoid1 + runif(period*period_number, -0.3, 0.3)
+  sinusoid18[83:87] <- sinusoid18[83:87]*c(0.75, 0.6, 0.4, 0.55, 0.7)
+  
+  clust <- rbind(sinusoid1,
+                 sinusoid15,
+                 sinusoid16,
+                 sinusoid17,
+                 sinusoid18)
+  
+  return(clust)
+  
+  
+  
+}
+
+
+#calculates probability that a single value is a good fit to the distribution assumed 
+#from the rest of the nodes
+
+fitnessCheck <- function(historic, newValue, confidence, plot = FALSE) {
+  
+  library(forecast)
+  
+  #fit an arima to the historical data
+  aa <- auto.arima(historic)
+  ff <- forecast(aa, h = 1, level = confidence)
+  
+  if(plot == TRUE) {
+    plot(ff)
+    lines(rep(newValue, length(historic) + 1), col = "red")
+  }
+  if(newValue >= ff$lower[1] && newValue <= ff$upper[1]) {
+    return(TRUE)
+  }
+  else {
+    return(FALSE)
+  }
+  
+}
+
+
+############## TEST SET GENERATION ###########
 
 #Generates a single time series with given parameters
 generateTimeSeries <- function(mean = 0, range = 1, periodicity = 24, noise = range/5, end = periodicity * 30, start_shift = 0, type = "sinusoid") {
@@ -5572,202 +5902,4 @@ set.addNoiseArea <- function(set, coordinates, center, range, noise = NULL, star
   
 }
 
-################ TRAINING ALGORITHM ###########
-
-discoverDescentThreshold <- function(cellData, period = 24) {
-  
-  
-  
-  for(feature in cellData) {
-    
-    for(cell in (1:nrow(feature))) {
-      
-      timeseries <- feature[cell,]
-      timeseries[is.na(timeseries)] <- 0
-      
-      timeseries <- ts(timeseries, frequency = period)
-      
-      season <- stl(timeseries, s.window = "periodic")
-      
-      
-    }
-    
-  }
-  
-  
-  #update historical mean and deviation for kpi
-  last_mean <- cell_historical_mean[[node]][kpi]
-  
-  
-  
-  
-}
-
-myTimeImage <- function(coord, vals, min = NULL, max = NULL,title = NULL) {
-  
-  if(is.null(min)){
-    min <- min(vals)
-  }
-  if(is.null(max)) {
-    max <- max(vals)
-  }
-  
-  vals <- rowMeans(as.matrix(vals), na.rm = T)
-  
-  mypal <- colorRampPalette( c( "blue", "red" ) )( 5 )
-  
-  cols <- map2color(vals, mypal, limits = c(min, max))
-  
-  plot(coord[,1], coord[,2], col = cols, main = title, pch = 19)
-  
-  
-}
-
-myTimeImage.add_cluster <- function(coord, cluster, color) {
-  
-  clust <- cluster$nodes
-  points(coord[clust, 1], coord[clust, 2], pch = 19, col = color)
-}
-
-slidingWindowsImage <- function(coord, vals, window, min = NULL, max = NULL, overlap = FALSE, save = NULL) {
-  
-  if(is.null(min)){
-    min <- min(vals)
-  }
-  if(is.null(max)) {
-    max <- max(vals)
-  }
-  
-  
-  valMat <- as.matrix(vals)
-  timeslots <- ncol(valMat)
-  
-  if(timeslots < window || window < 1) {
-    return (NULL)
-  }
-  
-  
-  
-  if(overlap == TRUE) {
-    for(i in (1: (timeslots - window + 1))) {
-      if(!is.null(save)) {
-        jpeg(file = paste(save,"Image ",i,".jpg"))
-      }
-      myTimeImage(coord, valMat[,(i:(i + window - 1))], min, max, 
-                  title = paste("Mapping values, hours ",i," to ",i+window-1))
-      
-      
-      if(!is.null(save)) {
-        dev.off()
-      }
-    }
-  }
-  else {
-    
-    for(i in (0:(floor(timeslots / window) - 1)) ) {
-      if(!is.null(save)) {
-        jpeg(file = paste(save,"Image ",i+1,".jpg"))
-      }
-      myTimeImage(coord, valMat[,((i*window + 1):( (i + 1)*window))], min, max, 
-                  title = paste("Mapping values, hours ",(i*window + 1)," to ",(i + 1)*window))
-      if(!is.null(save)) {
-        dev.off()
-      }
-    }
-    
-  }
-  
-  
-}
-
-map2color<-function(x,pal,limits=NULL){
-  if(is.null(limits)) limits=range(x)
-  pal[findInterval(x,seq(limits[1],limits[2],length.out=length(pal)+1), all.inside=TRUE)]
-}
-
-
-# ----- Define a function for plotting a matrix ----- #
-#from phaget4.org
-myImagePlot <- function(x, ...){
-  min <- min(x)
-  max <- max(x)
-  yLabels <- rownames(x)
-  xLabels <- colnames(x)
-  title <-c()
-  # check for additional function arguments
-  if( length(list(...)) ){
-    Lst <- list(...)
-    if( !is.null(Lst$zlim) ){
-      min <- Lst$zlim[1]
-      max <- Lst$zlim[2]
-    }
-    if( !is.null(Lst$yLabels) ){
-      yLabels <- c(Lst$yLabels)
-    }
-    if( !is.null(Lst$xLabels) ){
-      xLabels <- c(Lst$xLabels)
-    }
-    if( !is.null(Lst$title) ){
-      title <- Lst$title
-    }
-  }
-  # check for null values
-  if( is.null(xLabels) ){
-    xLabels <- c(1:ncol(x))
-  }
-  if( is.null(yLabels) ){
-    yLabels <- c(1:nrow(x))
-  }
-  
-  layout(matrix(data=c(1,2), nrow=1, ncol=2), widths=c(4,1), heights=c(1,1))
-  
-  # Red and green range from 0 to 1 while Blue ranges from 1 to 0
-  ColorRamp <- rgb( seq(0,1,length=256),  # Red
-                    seq(0,1,length=256),  # Green
-                    seq(1,0,length=256))  # Blue
-  ColorLevels <- seq(min, max, length=length(ColorRamp))
-  
-  # Reverse Y axis
-  reverse <- nrow(x) : 1
-  yLabels <- yLabels[reverse]
-  x <- x[reverse,]
-  
-  # Data Map
-  par(mar = c(3,5,2.5,2))
-  image(1:length(xLabels), 1:length(yLabels), t(x), col=ColorRamp, xlab="",
-        ylab="", axes=FALSE, zlim=c(min,max))
-  if( !is.null(title) ){
-    title(main=title)
-  }
-  axis(BELOW<-1, at=1:length(xLabels), labels=xLabels, cex.axis=0.7)
-  axis(LEFT <-2, at=1:length(yLabels), labels=yLabels, las= HORIZONTAL<-1,
-       cex.axis=0.7)
-  
-  # Color Scale
-  par(mar = c(3,2.5,2.5,2))
-  image(1, ColorLevels,
-        matrix(data=ColorLevels, ncol=length(ColorLevels),nrow=1),
-        col=ColorRamp,
-        xlab="",ylab="",
-        xaxt="n")
-  
-  layout(1)
-}
-# ----- END plot function ----- #
-
-
-densityPlot <- function(data, period = NULL, start = 1) {
-  
-  if(is.null(period)) {
-    vec <- as.numeric(data)
-    
-  }
-  else {
-    vec <- as.numeric(data[seq(start, length(data), period)])
-    
-  }
-  
-  plot(density(vec, na.rm = T), main = paste("Periodicity ", period, " slot ",start))
-  
-}
 
